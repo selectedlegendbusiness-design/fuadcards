@@ -12,7 +12,7 @@ import './i18n';
 import { Helmet, HelmetProvider } from 'react-helmet-async';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { 
   Trophy, 
   User as UserIcon, 
@@ -26,7 +26,9 @@ import {
   QrCode,
   ShoppingBag,
   RefreshCw,
-  ChevronRight
+  ChevronRight,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { formatDistanceToNow, isAfter, addHours, parseISO } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -53,48 +55,45 @@ const CARD_ACCENT_COLORS = [
 ];
 
 // --- Gemini Generation ---
-const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, power: number, strength: number, prompt: string }> => {
+const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, raw_power: number, strength: number, prompt_text: string }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
   
   // 1. Generate a detailed Card Description and Metadata
-  const metaResponse = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `You are a master anime card designer. Create a detailed, aesthetic description for a trading card of the character "${characterName}". 
-    The description should be a long, evocative paragraph describing the character's pose, the background, the lighting, and the overall vibe of the card.
-    
-    Additionally, assign a Power Level (between 500 and 1000) and a Strength Level (between 50 and 150) that accurately reflects their lore in the anime.
-    
-    Return the result in JSON format with these exact keys:
-    {
-      "description": "the long text prompt for the image generator",
-      "power": number,
-      "strength": number
-    }`,
-    config: {
-      responseMimeType: "application/json"
-    }
-  });
-
-  const metadata = JSON.parse(metaResponse.text || '{"description": "", "power": 750, "strength": 100}');
-  const longPrompt = metadata.description || `A high-quality, aesthetic anime trading card illustration of the character ${characterName}. Vibrant colors, dynamic pose, detailed background, professional digital art style, 4k resolution, trading card game art style.`;
-
-  // 2. Generate Image using the long prompt
-  const imageResponse = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.1-flash-image-preview',
     contents: {
       parts: [
         {
-          text: longPrompt,
-        },
-      ],
+          text: `You are a master anime card designer.
+          1. Create a long, detailed artistic prompt for a high-quality anime character trading card of "${characterName}". 
+          Use high-key lighting, minimal black colors, and an aesthetic/pastel palette. 
+          The description should be evocative, describing the character's pose, the background, the lighting, and the overall vibe.
+          
+          2. Based on this description, determine a Power Level (between 1 and 9999) and a Strength Rating (between 1 and 1000) that accurately reflects their lore.
+          
+          Return the description and stats as a JSON string in the text part, and also generate the image.
+          JSON format: {"description": "...", "power": 8500, "strength": 750}`
+        }
+      ]
     },
+    config: {
+      responseModalities: [Modality.TEXT, Modality.IMAGE],
+    }
   });
 
   let imageUrl = '';
-  for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
+  let metadata = { description: '', power: 1000, strength: 500 };
+
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
     if (part.inlineData) {
       imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-      break;
+    } else if (part.text) {
+      try {
+        const cleanText = part.text.replace(/```json|```/g, '').trim();
+        metadata = JSON.parse(cleanText);
+      } catch (e) {
+        console.error("Failed to parse metadata", e);
+      }
     }
   }
 
@@ -102,9 +101,9 @@ const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl:
 
   return {
     imageUrl,
-    power: metadata.power || 750,
-    strength: metadata.strength || 100,
-    prompt: longPrompt
+    raw_power: metadata.power || 1000,
+    strength: metadata.strength || 500,
+    prompt_text: metadata.description || `A high-quality, aesthetic anime trading card of ${characterName}.`
   };
 };
 
@@ -114,9 +113,9 @@ const SEO = () => {
   const { i18n } = useTranslation();
   return (
     <Helmet>
-      <title>FuadCards - Anime Trading Cards</title>
-      <meta name="description" content="Generate, collect, and order aesthetic anime trading cards. Join the FuadCards community!" />
-      <meta name="keywords" content="fuadcards, fuad editing zone, fuad zone, anime cards game, anime game, card game" />
+      <title>FuadCards | Aesthetic Anime Card Game</title>
+      <meta name="description" content="Collect, trade, and order aesthetic anime cards. Powered by Gemini AI." />
+      <meta name="keywords" content="fuadcards, fuad editing zone, anime cards game, card game, gemini ai, anime art" />
       <html lang={i18n.language} />
       <script type="application/ld+json">
         {JSON.stringify({
@@ -152,8 +151,9 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [player, setPlayer] = useState<Player | null>(null);
-  const [view, setView] = useState<'home' | 'generate' | 'leaderboard' | 'profile' | 'setup' | 'admin'>('home');
+  const [view, setView] = useState<'home' | 'generate' | 'leaderboard' | 'profile' | 'setup' | 'admin' | 'verify'>('home');
   const [publicProfileId, setPublicProfileId] = useState<string | null>(null);
+  const [verifyCardId, setVerifyCardId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -168,7 +168,7 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    // Google One-Tap Initialization
+    // Google One-Tap & Button Initialization
     const handleOneTapResponse = async (response: any) => {
       try {
         await signInWithOneTap(response.credential);
@@ -181,11 +181,24 @@ export default function App() {
       window.google.accounts.id.initialize({
         client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID',
         callback: handleOneTapResponse,
-        use_fedcm_for_prompt: false,
+        use_fedcm_for_prompt: true,
+        itp_support: true,
       });
+
+      const buttonDiv = document.getElementById("google-login-button");
+      if (buttonDiv) {
+        window.google.accounts.id.renderButton(buttonDiv, {
+          theme: "outline",
+          size: "large",
+          shape: "pill",
+          text: "signin_with",
+          logo_alignment: "left",
+        });
+      }
+
       window.google.accounts.id.prompt();
     }
-  }, [user]);
+  }, [user, view]);
 
   useEffect(() => {
     const path = window.location.pathname;
@@ -194,6 +207,12 @@ export default function App() {
       if (id) {
         setPublicProfileId(id);
         setView('profile');
+      }
+    } else if (path.startsWith('/verify/')) {
+      const id = path.split('/')[2];
+      if (id) {
+        setVerifyCardId(id);
+        setView('verify');
       }
     }
   }, []);
@@ -204,14 +223,17 @@ export default function App() {
       if (u) {
         const playerDoc = await getDoc(doc(db, 'players', u.uid));
         if (playerDoc.exists()) {
-          setPlayer(playerDoc.data() as Player);
-          if (view === 'setup') setView('home');
+          const pData = playerDoc.data() as Player;
+          setPlayer(pData);
+          // Use a functional update or just check the current state if needed
+          // But here we can just check u and pData
+          setView(prev => prev === 'setup' ? 'home' : prev);
         } else {
           setView('setup');
         }
       } else {
         setPlayer(null);
-        if (view !== 'leaderboard') setView('home');
+        setView(prev => prev !== 'leaderboard' ? 'home' : prev);
       }
       setLoading(false);
     });
@@ -298,12 +320,7 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <button 
-                  onClick={signInWithGoogle}
-                  className="px-4 py-2 bg-emerald-500 text-zinc-950 rounded-full font-bold text-sm hover:bg-emerald-400 transition-colors"
-                >
-                  {t('nav.login')}
-                </button>
+                <div id="google-login-button" data-itp_support="true"></div>
               )}
             </div>
           </div>
@@ -314,16 +331,21 @@ export default function App() {
           <AnimatePresence mode="wait">
             {user && !player ? (
               <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />
-            ) : (
-              <>
-                {view === 'home' && <HomeView key="home" setView={setView} />}
-                {view === 'generate' && <GenerateView key="generate" user={user} player={player} setPlayer={setPlayer} />}
-                {view === 'leaderboard' && <LeaderboardView key="leaderboard" />}
-                {view === 'profile' && <ProfileView key="profile" user={user} player={player} publicProfileId={publicProfileId} />}
-                {view === 'setup' && <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />}
-                {view === 'admin' && user?.email === ADMIN_EMAIL && <AdminView key="admin" />}
-              </>
-            )}
+            ) : view === 'home' ? (
+              <HomeView key="home" setView={setView} />
+            ) : view === 'generate' ? (
+              <GenerateView key="generate" user={user} player={player} setPlayer={setPlayer} />
+            ) : view === 'leaderboard' ? (
+              <LeaderboardView key="leaderboard" />
+            ) : view === 'profile' ? (
+              <ProfileView key="profile" user={user} player={player} publicProfileId={publicProfileId} />
+            ) : view === 'setup' ? (
+              <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />
+            ) : view === 'admin' && user?.email === ADMIN_EMAIL ? (
+              <AdminView key="admin" />
+            ) : view === 'verify' ? (
+              <VerifyView key="verify" cardId={verifyCardId} />
+            ) : null}
           </AnimatePresence>
         </main>
 
@@ -348,6 +370,55 @@ export default function App() {
 }
 
 // --- View Components ---
+
+function VerifyView({ cardId }: { cardId: string | null, key?: string }) {
+  const [card, setCard] = useState<Card | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!cardId) return;
+    const fetchCard = async () => {
+      const docRef = doc(db, 'cards', cardId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setCard(docSnap.data() as Card);
+      }
+      setLoading(false);
+    };
+    fetchCard();
+  }, [cardId]);
+
+  if (loading) return <div className="flex justify-center py-20"><RefreshCw className="w-8 h-8 animate-spin text-emerald-500" /></div>;
+  if (!card) return <div className="text-center py-20 text-zinc-500">Card not found</div>;
+
+  return (
+    <div className="max-w-xl mx-auto space-y-8">
+      <div className="text-center">
+        <h2 className="text-4xl font-bold tracking-tighter mb-2">Card Verification</h2>
+        <p className="text-zinc-500">Official FuadCards Authentication</p>
+      </div>
+
+      {card.is_approved ? (
+        <div className="space-y-8">
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 flex items-center gap-3 text-emerald-500">
+            <CheckCircle2 className="w-5 h-5" />
+            <p className="font-bold">This card is verified and approved by Admin.</p>
+          </div>
+          <CardUI card={card} />
+        </div>
+      ) : (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-8 text-center space-y-4">
+          <AlertCircle className="w-12 h-12 text-amber-500 mx-auto" />
+          <h3 className="text-xl font-bold text-amber-500">Verification Pending</h3>
+          <p className="text-zinc-400">
+            This card has been generated but is currently awaiting admin approval. 
+            Stats and details are hidden until verified.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function HomeView({ setView }: { setView: (v: any) => void, key?: string }) {
   const { t } = useTranslation();
@@ -464,22 +535,24 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         return;
       }
 
-      const { imageUrl, power, strength, prompt } = await generateAnimeCardData(nameToGenerate);
+      const { imageUrl, raw_power, strength, prompt_text } = await generateAnimeCardData(nameToGenerate);
       const accentColor = CARD_ACCENT_COLORS[Math.floor(Math.random() * CARD_ACCENT_COLORS.length)];
       const cardId = Math.random().toString(36).substring(2, 15);
 
       const card: Card = {
         cardId,
-        ownerId: user.uid,
+        player_id: user.uid,
         ownerName: player.name,
         characterName: nameToGenerate,
         imageUrl: imageUrl,
-        power,
+        raw_power,
         strength,
         status: 'pending',
+        is_approved: false,
         createdAt: new Date().toISOString(),
         accentColor,
-        prompt
+        prompt_text,
+        qr_data: `${window.location.origin}/verify/${cardId}`
       };
 
       // Save Card
@@ -525,6 +598,17 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
       animate={{ opacity: 1 }}
       className="max-w-4xl mx-auto"
     >
+      {generating && (
+        <div className="fixed inset-0 z-[100] bg-zinc-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center">
+          <div className="relative w-24 h-24 mb-8">
+            <div className="absolute inset-0 border-4 border-emerald-500/20 rounded-full" />
+            <div className="absolute inset-0 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <Zap className="absolute inset-0 m-auto w-8 h-8 text-emerald-500 animate-pulse" />
+          </div>
+          <h2 className="text-3xl font-black tracking-tighter mb-2 uppercase italic">Gemini is crafting your character...</h2>
+          <p className="text-zinc-500 max-w-xs mx-auto">This takes a moment as we generate high-quality aesthetic art and lore-accurate stats.</p>
+        </div>
+      )}
       <div className="flex flex-col md:flex-row gap-12 items-start">
         <div className="flex-1 w-full">
           <h2 className="text-4xl font-bold mb-2">{t('generate.title')}</h2>
@@ -641,14 +725,17 @@ function AdminView() {
   const handleApprove = async (card: Card) => {
     try {
       // 1. Update Card Status
-      await updateDoc(doc(db, 'cards', card.cardId), { status: 'approved' });
+      await updateDoc(doc(db, 'cards', card.cardId), { 
+        status: 'approved',
+        is_approved: true 
+      });
 
       // 2. Update Player Total Power
-      const playerRef = doc(db, 'players', card.ownerId);
+      const playerRef = doc(db, 'players', card.player_id);
       const playerSnap = await getDoc(playerRef);
       if (playerSnap.exists()) {
         const currentPower = playerSnap.data().totalPower || 0;
-        await updateDoc(playerRef, { totalPower: currentPower + card.power });
+        await updateDoc(playerRef, { totalPower: currentPower + card.raw_power });
       }
     } catch (error) {
       console.error("Approval failed", error);
@@ -658,14 +745,22 @@ function AdminView() {
   const handleReject = async (cardId: string) => {
     if (confirm("Are you sure you want to reject and delete this card?")) {
       try {
-        // In a real app, we might just mark as rejected, but here we delete for simplicity
-        // await deleteDoc(doc(db, 'cards', cardId)); 
-        // Actually let's just mark as 'rejected' if we had that status, but for now we'll just leave it or delete.
-        // Let's just update status to 'rejected'
-        await updateDoc(doc(db, 'cards', cardId), { status: 'ordered' }); // Using 'ordered' as a fallback for now
+        await updateDoc(doc(db, 'cards', cardId), { status: 'ordered' }); 
       } catch (error) {
         console.error("Rejection failed", error);
       }
+    }
+  };
+
+  const handleWipeAllPowers = async () => {
+    if (!confirm("CRITICAL: This will reset EVERY player's totalPower to 0. This is irreversible. Continue?")) return;
+    try {
+      const playersSnap = await getDocs(collection(db, 'players'));
+      const batch = playersSnap.docs.map(playerDoc => updateDoc(doc(db, 'players', playerDoc.id), { totalPower: 0 }));
+      await Promise.all(batch);
+      alert("All player powers have been reset to 0.");
+    } catch (error) {
+      console.error("Wipe failed", error);
     }
   };
 
@@ -678,9 +773,17 @@ function AdminView() {
           <h2 className="text-4xl font-black tracking-tighter uppercase italic">Admin Dashboard</h2>
           <p className="text-zinc-500">Review and approve pending card generations.</p>
         </div>
-        <div className="bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-xl">
-          <span className="text-xs font-bold text-red-500 uppercase tracking-widest">Pending Requests</span>
-          <p className="text-2xl font-black text-red-400 leading-none">{pendingCards.length}</p>
+        <div className="flex gap-4">
+          <button 
+            onClick={handleWipeAllPowers}
+            className="bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-xl hover:bg-red-500/20 transition-colors"
+          >
+            <span className="text-xs font-bold text-red-500 uppercase tracking-widest">Wipe All Powers</span>
+          </button>
+          <div className="bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-xl">
+            <span className="text-xs font-bold text-red-500 uppercase tracking-widest">Pending Requests</span>
+            <p className="text-2xl font-black text-red-400 leading-none">{pendingCards.length}</p>
+          </div>
         </div>
       </div>
 
@@ -700,17 +803,17 @@ function AdminView() {
                 <h3 className="text-xl font-bold truncate">{card.characterName}</h3>
                 <p className="text-xs text-zinc-500 mb-2">Owner: <span className="text-zinc-300">{card.ownerName}</span></p>
                 
-                {card.prompt && (
+                {card.prompt_text && (
                   <div className="mb-4 p-3 bg-zinc-950 rounded-xl border border-white/5">
                     <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-1">AI Prompt</p>
-                    <p className="text-[10px] text-zinc-400 line-clamp-2 italic leading-relaxed">"{card.prompt}"</p>
+                    <p className="text-[10px] text-zinc-400 line-clamp-2 italic leading-relaxed">"{card.prompt_text}"</p>
                   </div>
                 )}
 
                 <div className="flex gap-4 mb-4">
                   <div>
                     <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Power</p>
-                    <p className="text-lg font-black text-emerald-500 leading-none">{card.power}</p>
+                    <p className="text-lg font-black text-emerald-500 leading-none">{card.raw_power}</p>
                   </div>
                   <div>
                     <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Strength</p>
@@ -742,7 +845,7 @@ function AdminView() {
 
 function CardUI({ card }: { card: Card & { accentColor?: string } }) {
   const [showPrompt, setShowPrompt] = useState(false);
-  const qrValue = `${window.location.origin}/profile/${card.ownerId}`;
+  const qrValue = card.qr_data || `${window.location.origin}/verify/${card.cardId}`;
   const accent = card.accentColor || 'emerald';
   
   const accentClasses: Record<string, string> = {
@@ -785,7 +888,7 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
           <div className="flex justify-between items-start">
             <div className={cn("backdrop-blur-md border border-white/20 rounded-xl px-3 py-1", accentBg)}>
               <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Power Level</span>
-              <p className={cn("text-xl font-black leading-none", accentText)}>{card.power}</p>
+              <p className={cn("text-xl font-black leading-none", accentText)}>{card.raw_power}</p>
             </div>
             
             {/* QR Code in Corner */}
@@ -800,7 +903,7 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
                 <h3 className="text-3xl font-black italic tracking-tighter text-white drop-shadow-lg uppercase truncate flex-1">
                   {card.characterName}
                 </h3>
-                {card.prompt && (
+                {card.prompt_text && (
                   <button 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -828,7 +931,7 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
               <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-3 flex flex-col items-center">
                 <Trophy className={cn("w-4 h-4 mb-1", accentText)} />
                 <span className="text-[8px] font-bold uppercase tracking-widest text-white/50">Rank</span>
-                <p className="text-lg font-bold text-white leading-none">#{Math.floor(card.power / 10)}</p>
+                <p className="text-lg font-bold text-white leading-none">#{Math.floor(card.raw_power / 10)}</p>
               </div>
             </div>
           </div>
@@ -847,7 +950,7 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
               <Globe className={cn("w-12 h-12 mx-auto mb-6", accentText)} />
               <h4 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-4">AI Generation Prompt</h4>
               <p className="text-sm text-zinc-300 italic leading-relaxed">
-                "{card.prompt}"
+                "{card.prompt_text}"
               </p>
               <button className="mt-8 text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-white transition-colors">
                 Click to Close
@@ -928,7 +1031,7 @@ function LeaderboardView({ key }: { key?: string }) {
                 <td className="px-8 py-6 text-right">
                   <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 font-bold">
                     <Zap className="w-3 h-3" />
-                    {p.totalPower}
+                    {p.totalPower || 0}
                   </div>
                 </td>
               </tr>
@@ -970,18 +1073,28 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
 
     fetchProfile();
 
-    const q = query(collection(db, 'cards'), where('ownerId', '==', targetUid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const q = query(collection(db, 'cards'), where('player_id', '==', targetUid));
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
       const fetchedCards = snapshot.docs.map(doc => doc.data() as Card);
       // Sort client-side
       const sortedCards = fetchedCards.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setCards(sortedCards);
+
+      // Reconciliation: If no cards exist for this player, ensure totalPower is 0
+      if (fetchedCards.length === 0 && targetUid === user?.uid) {
+        const playerRef = doc(db, 'players', targetUid);
+        const playerSnap = await getDoc(playerRef);
+        if (playerSnap.exists() && playerSnap.data().totalPower !== 0) {
+          await updateDoc(playerRef, { totalPower: 0 });
+          setProfilePlayer(prev => prev ? { ...prev, totalPower: 0 } : null);
+        }
+      }
     });
     return unsubscribe;
   }, [targetUid]);
 
   const handleOrder = async (card: Card) => {
-    if (!user || user.uid !== card.ownerId) return;
+    if (!user || user.uid !== card.player_id) return;
     try {
       await updateDoc(doc(db, 'cards', card.cardId), { status: 'ordered' });
       window.open(`mailto:${ADMIN_EMAIL}?subject=Card Order Request&body=I would like to order card: ${card.cardId} (${card.characterName})`);
@@ -990,32 +1103,9 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
     }
   };
 
-  const handleResetCollection = async () => {
-    if (!user || !profilePlayer || user.uid !== profilePlayer.uid) return;
-    if (!confirm("Are you sure you want to reset your collection and power? This will DELETE all your cards and reset your power to 0. This cannot be undone.")) return;
-
-    try {
-      setLoading(true);
-      // 1. Reset Power
-      await updateDoc(doc(db, 'players', user.uid), { totalPower: 0 });
-      
-      // 2. Delete Cards
-      const deletePromises = cards.map(card => deleteDoc(doc(db, 'cards', card.cardId)));
-      await Promise.all(deletePromises);
-      
-      setProfilePlayer({ ...profilePlayer, totalPower: 0 });
-      setCards([]);
-      alert("Collection and power reset successfully.");
-    } catch (error) {
-      console.error("Reset failed", error);
-      alert("Reset failed. Some items might not have been deleted.");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDeleteCard = async (card: Card) => {
-    if (!user || user.uid !== card.ownerId) return;
+    if (!user || user.uid !== card.player_id) return;
     if (!confirm(`Are you sure you want to delete ${card.characterName}? If approved, its power will be removed from your total.`)) return;
 
     try {
@@ -1023,8 +1113,8 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
       await deleteDoc(doc(db, 'cards', card.cardId));
 
       // 2. If approved, subtract power
-      if (card.status === 'approved' && profilePlayer) {
-        const newPower = Math.max(0, (profilePlayer.totalPower || 0) - card.power);
+      if (card.is_approved && profilePlayer) {
+        const newPower = Math.max(0, (profilePlayer.totalPower || 0) - card.raw_power);
         await updateDoc(doc(db, 'players', user.uid), { totalPower: newPower });
         setProfilePlayer({ ...profilePlayer, totalPower: newPower });
       }
@@ -1151,7 +1241,7 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-w-lg mt-4">
               <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-500/60 mb-1">{t('profile.total_power')}</p>
-                <p className="text-2xl font-black text-emerald-500">{profilePlayer.totalPower}</p>
+                <p className="text-2xl font-black text-emerald-500">{profilePlayer.totalPower || 0}</p>
               </div>
               <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-1">{t('profile.cards_owned')}</p>
@@ -1165,12 +1255,6 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
                   >
                     <span className="text-[10px] font-bold uppercase tracking-widest text-red-500/60">{t('nav.logout')}</span>
                     <LogOut className="w-4 h-4 text-red-500 group-hover:translate-x-1 transition-transform" />
-                  </button>
-                  <button 
-                    onClick={handleResetCollection}
-                    className="p-2 rounded-xl bg-zinc-800 text-zinc-500 text-[8px] font-bold uppercase tracking-widest hover:bg-red-500/10 hover:text-red-500 transition-colors"
-                  >
-                    Reset Power
                   </button>
                 </div>
               )}

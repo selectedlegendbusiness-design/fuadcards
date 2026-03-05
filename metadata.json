@@ -1,5 +1,5 @@
 {
   "name": "FuadCards",
   "description": "Generate, collect, and order aesthetic anime trading cards. Compete on the leaderboard and build your ultimate collection.",
-  "requestFramePermissions": ["identity-credentials-get"]
+  "requestFramePermissions": ["identity-credentials-get", "otp-credentials"]
 }

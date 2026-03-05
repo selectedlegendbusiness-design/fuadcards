@@ -112,6 +112,7 @@ i18n
   .use(initReactI18next)
   .init({
     resources,
+    lng: 'bn', // Set default language to Bangla
     fallbackLng: 'bn',
     interpolation: {
       escapeValue: false

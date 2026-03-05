@@ -10,15 +10,17 @@ export interface Player {
 
 export interface Card {
   cardId: string;
-  ownerId: string;
+  player_id: string;
   ownerName: string;
   characterName: string;
   imageUrl: string;
-  power: number;
+  raw_power: number;
   strength: number;
   status: 'pending' | 'ordered' | 'approved';
+  is_approved: boolean;
   accentColor?: string;
-  prompt?: string;
+  prompt_text: string;
+  qr_data: string;
   createdAt: string;
 }
 
