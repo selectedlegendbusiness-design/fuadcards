@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { auth, db, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp } from './firebase';
+import { auth, db, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Player, Card } from './types';
 import { useTranslation } from 'react-i18next';
@@ -627,10 +627,12 @@ function AdminView() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, 'cards'), where('status', '==', 'pending'), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'cards'), where('status', '==', 'pending'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const cards = snapshot.docs.map(doc => ({ ...doc.data(), cardId: doc.id } as Card));
-      setPendingCards(cards);
+      // Sort client-side to avoid index requirements
+      const sortedCards = cards.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setPendingCards(sortedCards);
       setLoading(false);
     });
     return unsubscribe;
@@ -739,6 +741,7 @@ function AdminView() {
 }
 
 function CardUI({ card }: { card: Card & { accentColor?: string } }) {
+  const [showPrompt, setShowPrompt] = useState(false);
   const qrValue = `${window.location.origin}/profile/${card.ownerId}`;
   const accent = card.accentColor || 'emerald';
   
@@ -793,9 +796,23 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
 
           <div className="space-y-4">
             <div className="space-y-1">
-              <h3 className="text-3xl font-black italic tracking-tighter text-white drop-shadow-lg uppercase truncate">
-                {card.characterName}
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-3xl font-black italic tracking-tighter text-white drop-shadow-lg uppercase truncate flex-1">
+                  {card.characterName}
+                </h3>
+                {card.prompt && (
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPrompt(!showPrompt);
+                    }}
+                    className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                    title="View AI Prompt"
+                  >
+                    <Globe className="w-4 h-4 text-white/50" />
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <div className={cn("h-1 w-12 rounded-full", accentBg.replace('bg-', 'bg-').replace('/10', ''))} />
                 <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">Legendary Edition</span>
@@ -816,6 +833,28 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
             </div>
           </div>
         </div>
+
+        {/* AI Prompt Overlay */}
+        <AnimatePresence>
+          {showPrompt && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="absolute inset-0 z-20 bg-zinc-950/90 backdrop-blur-xl p-8 flex flex-col justify-center text-center"
+              onClick={() => setShowPrompt(false)}
+            >
+              <Globe className={cn("w-12 h-12 mx-auto mb-6", accentText)} />
+              <h4 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-4">AI Generation Prompt</h4>
+              <p className="text-sm text-zinc-300 italic leading-relaxed">
+                "{card.prompt}"
+              </p>
+              <button className="mt-8 text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-white transition-colors">
+                Click to Close
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Shine Effect */}
         <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none">
@@ -931,9 +970,12 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
 
     fetchProfile();
 
-    const q = query(collection(db, 'cards'), where('ownerId', '==', targetUid), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'cards'), where('ownerId', '==', targetUid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setCards(snapshot.docs.map(doc => doc.data() as Card));
+      const fetchedCards = snapshot.docs.map(doc => doc.data() as Card);
+      // Sort client-side
+      const sortedCards = fetchedCards.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setCards(sortedCards);
     });
     return unsubscribe;
   }, [targetUid]);
@@ -945,6 +987,49 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
       window.open(`mailto:${ADMIN_EMAIL}?subject=Card Order Request&body=I would like to order card: ${card.cardId} (${card.characterName})`);
     } catch (error) {
       console.error("Order failed", error);
+    }
+  };
+
+  const handleResetCollection = async () => {
+    if (!user || !profilePlayer || user.uid !== profilePlayer.uid) return;
+    if (!confirm("Are you sure you want to reset your collection and power? This will DELETE all your cards and reset your power to 0. This cannot be undone.")) return;
+
+    try {
+      setLoading(true);
+      // 1. Reset Power
+      await updateDoc(doc(db, 'players', user.uid), { totalPower: 0 });
+      
+      // 2. Delete Cards
+      const deletePromises = cards.map(card => deleteDoc(doc(db, 'cards', card.cardId)));
+      await Promise.all(deletePromises);
+      
+      setProfilePlayer({ ...profilePlayer, totalPower: 0 });
+      setCards([]);
+      alert("Collection and power reset successfully.");
+    } catch (error) {
+      console.error("Reset failed", error);
+      alert("Reset failed. Some items might not have been deleted.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteCard = async (card: Card) => {
+    if (!user || user.uid !== card.ownerId) return;
+    if (!confirm(`Are you sure you want to delete ${card.characterName}? If approved, its power will be removed from your total.`)) return;
+
+    try {
+      // 1. Delete Card
+      await deleteDoc(doc(db, 'cards', card.cardId));
+
+      // 2. If approved, subtract power
+      if (card.status === 'approved' && profilePlayer) {
+        const newPower = Math.max(0, (profilePlayer.totalPower || 0) - card.power);
+        await updateDoc(doc(db, 'players', user.uid), { totalPower: newPower });
+        setProfilePlayer({ ...profilePlayer, totalPower: newPower });
+      }
+    } catch (error) {
+      console.error("Delete failed", error);
     }
   };
 
@@ -1073,13 +1158,21 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
                 <p className="text-2xl font-black text-white">{cards.length}</p>
               </div>
               {isOwnProfile && (
-                <button 
-                  onClick={logout}
-                  className="p-4 rounded-2xl bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors group"
-                >
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-500/60 mb-1">{t('nav.logout')}</p>
-                  <LogOut className="w-6 h-6 text-red-500 group-hover:translate-x-1 transition-transform" />
-                </button>
+                <div className="flex flex-col gap-2">
+                  <button 
+                    onClick={logout}
+                    className="flex-1 p-3 rounded-2xl bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors group flex items-center justify-between"
+                  >
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-red-500/60">{t('nav.logout')}</span>
+                    <LogOut className="w-4 h-4 text-red-500 group-hover:translate-x-1 transition-transform" />
+                  </button>
+                  <button 
+                    onClick={handleResetCollection}
+                    className="p-2 rounded-xl bg-zinc-800 text-zinc-500 text-[8px] font-bold uppercase tracking-widest hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                  >
+                    Reset Power
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -1098,28 +1191,37 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
             <div key={card.cardId} className="space-y-4">
               <CardUI card={card} />
               {isOwnProfile && (
-                <button 
-                  onClick={() => handleOrder(card)}
-                  disabled={card.status === 'ordered'}
-                  className={cn(
-                    "w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all",
-                    card.status === 'ordered' 
-                      ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" 
-                      : "bg-white/5 border border-white/10 hover:bg-emerald-500 hover:text-zinc-950 hover:border-emerald-500"
-                  )}
-                >
-                  {card.status === 'ordered' ? (
-                    <>
-                      <ShoppingBag className="w-5 h-5" />
-                      {t('profile.ordered')}
-                    </>
-                  ) : (
-                    <>
-                      <ShoppingBag className="w-5 h-5" />
-                      {t('profile.order_btn')}
-                    </>
-                  )}
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => handleOrder(card)}
+                    disabled={card.status === 'ordered'}
+                    className={cn(
+                      "flex-1 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all",
+                      card.status === 'ordered' 
+                        ? "bg-zinc-800 text-zinc-500 cursor-not-allowed" 
+                        : "bg-white/5 border border-white/10 hover:bg-emerald-500 hover:text-zinc-950 hover:border-emerald-500"
+                    )}
+                  >
+                    {card.status === 'ordered' ? (
+                      <>
+                        <ShoppingBag className="w-5 h-5" />
+                        {t('profile.ordered')}
+                      </>
+                    ) : (
+                      <>
+                        <ShoppingBag className="w-5 h-5" />
+                        {t('profile.order_btn')}
+                      </>
+                    )}
+                  </button>
+                  <button 
+                    onClick={() => handleDeleteCard(card)}
+                    className="p-4 rounded-2xl bg-white/5 border border-white/10 text-zinc-500 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20 transition-all"
+                    title="Delete Card"
+                  >
+                    <LogOut className="w-5 h-5 rotate-180" />
+                  </button>
+                </div>
               )}
             </div>
           ))}
