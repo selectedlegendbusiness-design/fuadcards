@@ -19,3 +19,9 @@ export interface Card {
   status: 'pending' | 'ordered';
   createdAt: string;
 }
+
+declare global {
+  interface Window {
+    google: any;
+  }
+}

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { auth, db, signInWithGoogle, logout, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp } from './firebase';
+import { auth, db, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Player, Card } from './types';
 import { useTranslation } from 'react-i18next';
@@ -103,6 +103,26 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Google One-Tap Initialization
+    const handleOneTapResponse = async (response: any) => {
+      try {
+        await signInWithOneTap(response.credential);
+      } catch (error) {
+        console.error("One Tap Login Failed", error);
+      }
+    };
+
+    if (window.google && !user) {
+      window.google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID',
+        callback: handleOneTapResponse,
+        use_fedcm_for_prompt: false,
+      });
+      window.google.accounts.id.prompt();
+    }
+  }, [user]);
+
+  useEffect(() => {
     const path = window.location.pathname;
     if (path.startsWith('/profile/')) {
       const id = path.split('/')[2];
@@ -191,6 +211,13 @@ export default function App() {
                   >
                     <img src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`} alt="Profile" referrerPolicy="no-referrer" />
                   </button>
+                  <button 
+                    onClick={logout}
+                    className="p-2 hover:bg-red-500/10 text-red-500 rounded-full transition-colors"
+                    title={t('nav.logout')}
+                  >
+                    <LogOut className="w-5 h-5" />
+                  </button>
                 </div>
               ) : (
                 <button 
@@ -207,11 +234,17 @@ export default function App() {
         {/* Main Content */}
         <main className="max-w-7xl mx-auto px-4 py-8">
           <AnimatePresence mode="wait">
-            {view === 'home' && <HomeView key="home" setView={setView} />}
-            {view === 'generate' && <GenerateView key="generate" user={user} player={player} setPlayer={setPlayer} />}
-            {view === 'leaderboard' && <LeaderboardView key="leaderboard" />}
-            {view === 'profile' && <ProfileView key="profile" user={user} player={player} publicProfileId={publicProfileId} />}
-            {view === 'setup' && <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />}
+            {user && !player ? (
+              <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />
+            ) : (
+              <>
+                {view === 'home' && <HomeView key="home" setView={setView} />}
+                {view === 'generate' && <GenerateView key="generate" user={user} player={player} setPlayer={setPlayer} />}
+                {view === 'leaderboard' && <LeaderboardView key="leaderboard" />}
+                {view === 'profile' && <ProfileView key="profile" user={user} player={player} publicProfileId={publicProfileId} />}
+                {view === 'setup' && <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />}
+              </>
+            )}
           </AnimatePresence>
         </main>
 
@@ -630,6 +663,11 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
   const [cards, setCards] = useState<Card[]>([]);
   const [profilePlayer, setProfilePlayer] = useState<Player | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editAge, setEditAge] = useState('');
+  const [editFavAnime, setEditFavAnime] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const targetUid = publicProfileId || user?.uid;
 
@@ -640,7 +678,11 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
       const docRef = doc(db, 'players', targetUid);
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        setProfilePlayer(docSnap.data() as Player);
+        const data = docSnap.data() as Player;
+        setProfilePlayer(data);
+        setEditName(data.name);
+        setEditAge(data.age?.toString() || '');
+        setEditFavAnime(data.favAnime || '');
       }
       setLoading(false);
     };
@@ -669,6 +711,26 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
 
   const isOwnProfile = user?.uid === profilePlayer.uid;
 
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !profilePlayer) return;
+    setSaving(true);
+    try {
+      const updatedData = {
+        name: editName,
+        age: parseInt(editAge),
+        favAnime: editFavAnime
+      };
+      await updateDoc(doc(db, 'players', user.uid), updatedData);
+      setProfilePlayer({ ...profilePlayer, ...updatedData });
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Update failed", error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -692,19 +754,74 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
           </div>
           
           <div className="flex-1 text-center md:text-left">
-            <h2 className="text-5xl font-black tracking-tighter mb-2 uppercase italic">{profilePlayer.name}</h2>
-            <div className="flex flex-wrap justify-center md:justify-start gap-4 mb-8">
-              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 text-zinc-400 text-sm">
-                <UserIcon className="w-4 h-4" />
-                {profilePlayer.age} {t('setup.age')}
-              </div>
-              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 text-zinc-400 text-sm">
-                <Home className="w-4 h-4" />
-                {profilePlayer.favAnime}
-              </div>
-            </div>
+            {isEditing ? (
+              <form onSubmit={handleUpdateProfile} className="space-y-4 max-w-md">
+                <input 
+                  type="text" 
+                  value={editName} 
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-white/10 rounded-xl px-4 py-2 focus:border-emerald-500 outline-none"
+                  placeholder="Name"
+                />
+                <div className="flex gap-4">
+                  <input 
+                    type="number" 
+                    value={editAge} 
+                    onChange={(e) => setEditAge(e.target.value)}
+                    className="w-1/3 bg-zinc-950 border border-white/10 rounded-xl px-4 py-2 focus:border-emerald-500 outline-none"
+                    placeholder="Age"
+                  />
+                  <input 
+                    type="text" 
+                    value={editFavAnime} 
+                    onChange={(e) => setEditFavAnime(e.target.value)}
+                    className="flex-1 bg-zinc-950 border border-white/10 rounded-xl px-4 py-2 focus:border-emerald-500 outline-none"
+                    placeholder="Favorite Anime"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    type="submit" 
+                    disabled={saving}
+                    className="px-6 py-2 bg-emerald-500 text-zinc-950 rounded-xl font-bold hover:bg-emerald-400 transition-colors disabled:opacity-50"
+                  >
+                    {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Save"}
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => setIsEditing(false)}
+                    className="px-6 py-2 bg-white/5 border border-white/10 rounded-xl font-bold hover:bg-white/10 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <h2 className="text-5xl font-black tracking-tighter mb-2 uppercase italic">{profilePlayer.name}</h2>
+                <div className="flex flex-wrap justify-center md:justify-start gap-4 mb-8">
+                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 text-zinc-400 text-sm">
+                    <UserIcon className="w-4 h-4" />
+                    {profilePlayer.age} {t('setup.age')}
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 text-zinc-400 text-sm">
+                    <Home className="w-4 h-4" />
+                    {profilePlayer.favAnime}
+                  </div>
+                  {isOwnProfile && (
+                    <button 
+                      onClick={() => setIsEditing(true)}
+                      className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-sm hover:bg-emerald-500/20 transition-colors"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Edit Profile
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-w-lg">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-w-lg mt-4">
               <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-500/60 mb-1">{t('profile.total_power')}</p>
                 <p className="text-2xl font-black text-emerald-500">{profilePlayer.totalPower}</p>
