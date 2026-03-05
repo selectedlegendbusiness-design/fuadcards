@@ -53,29 +53,38 @@ const CARD_ACCENT_COLORS = [
 ];
 
 // --- Gemini Generation ---
-const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, power: number, strength: number }> => {
+const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, power: number, strength: number, prompt: string }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
   
-  // 1. Generate Metadata (Power & Strength) based on character lore
+  // 1. Generate a detailed Card Description and Metadata
   const metaResponse = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Analyze the anime character "${characterName}". 
-    Assign a Power Level (500-1000) and Strength (50-150) based on their actual abilities in their respective anime.
-    Return ONLY a JSON object: {"power": number, "strength": number}`,
+    contents: `You are a master anime card designer. Create a detailed, aesthetic description for a trading card of the character "${characterName}". 
+    The description should be a long, evocative paragraph describing the character's pose, the background, the lighting, and the overall vibe of the card.
+    
+    Additionally, assign a Power Level (between 500 and 1000) and a Strength Level (between 50 and 150) that accurately reflects their lore in the anime.
+    
+    Return the result in JSON format with these exact keys:
+    {
+      "description": "the long text prompt for the image generator",
+      "power": number,
+      "strength": number
+    }`,
     config: {
       responseMimeType: "application/json"
     }
   });
 
-  const metadata = JSON.parse(metaResponse.text || '{"power": 750, "strength": 100}');
+  const metadata = JSON.parse(metaResponse.text || '{"description": "", "power": 750, "strength": 100}');
+  const longPrompt = metadata.description || `A high-quality, aesthetic anime trading card illustration of the character ${characterName}. Vibrant colors, dynamic pose, detailed background, professional digital art style, 4k resolution, trading card game art style.`;
 
-  // 2. Generate Image
+  // 2. Generate Image using the long prompt
   const imageResponse = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
       parts: [
         {
-          text: `A high-quality, aesthetic anime trading card illustration of the character ${characterName}. Vibrant colors, dynamic pose, detailed background, professional digital art style, 4k resolution, trading card game art style.`,
+          text: longPrompt,
         },
       ],
     },
@@ -94,7 +103,8 @@ const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl:
   return {
     imageUrl,
     power: metadata.power || 750,
-    strength: metadata.strength || 100
+    strength: metadata.strength || 100,
+    prompt: longPrompt
   };
 };
 
@@ -454,7 +464,7 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         return;
       }
 
-      const { imageUrl, power, strength } = await generateAnimeCardData(nameToGenerate);
+      const { imageUrl, power, strength, prompt } = await generateAnimeCardData(nameToGenerate);
       const accentColor = CARD_ACCENT_COLORS[Math.floor(Math.random() * CARD_ACCENT_COLORS.length)];
       const cardId = Math.random().toString(36).substring(2, 15);
 
@@ -468,7 +478,8 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         strength,
         status: 'pending',
         createdAt: new Date().toISOString(),
-        accentColor
+        accentColor,
+        prompt
       };
 
       // Save Card
@@ -686,6 +697,14 @@ function AdminView() {
               <div className="flex-1 min-w-0">
                 <h3 className="text-xl font-bold truncate">{card.characterName}</h3>
                 <p className="text-xs text-zinc-500 mb-2">Owner: <span className="text-zinc-300">{card.ownerName}</span></p>
+                
+                {card.prompt && (
+                  <div className="mb-4 p-3 bg-zinc-950 rounded-xl border border-white/5">
+                    <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-1">AI Prompt</p>
+                    <p className="text-[10px] text-zinc-400 line-clamp-2 italic leading-relaxed">"{card.prompt}"</p>
+                  </div>
+                )}
+
                 <div className="flex gap-4 mb-4">
                   <div>
                     <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Power</p>

@@ -18,6 +18,7 @@ export interface Card {
   strength: number;
   status: 'pending' | 'ordered' | 'approved';
   accentColor?: string;
+  prompt?: string;
   createdAt: string;
 }
 
