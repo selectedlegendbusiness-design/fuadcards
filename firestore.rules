@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isValidPlayer(data) {
+      return data.keys().hasAll(['uid', 'name', 'totalPower']) &&
+             data.uid is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.totalPower is int;
+    }
+
+    function isValidCard(data) {
+      return data.keys().hasAll(['cardId', 'ownerId', 'imageUrl', 'power', 'strength']) &&
+             data.cardId is string &&
+             data.ownerId is string &&
+             data.imageUrl is string &&
+             data.power is int &&
+             data.strength is int;
+    }
+
+    // Players Collection
+    match /players/{uid} {
+      allow read: if true; // Public profiles for QR code scanning
+      allow create: if isOwner(uid) && isValidPlayer(request.resource.data);
+      allow update: if isOwner(uid) && isValidPlayer(request.resource.data);
+    }
+
+    // Cards Collection
+    match /cards/{cardId} {
+      allow read: if true; // Cards are public for sharing/viewing
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCard(request.resource.data);
+      allow update: if isAuthenticated() && (
+        // Owner can update status to 'ordered'
+        (resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])) ||
+        // Admin logic could go here if needed
+        false
+      );
+      allow delete: if false; // Cards are permanent
+    }
+  }
+}

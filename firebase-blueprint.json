@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "Player": {
+      "title": "Player",
+      "description": "User profile and game stats",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "age": { "type": "integer" },
+        "favAnime": { "type": "string" },
+        "totalPower": { "type": "integer" },
+        "lastGenerations": { 
+          "type": "array",
+          "items": { "type": "string", "format": "date-time" },
+          "description": "Timestamps of the last 2 card generations"
+        },
+        "photoURL": { "type": "string" }
+      },
+      "required": ["uid", "name", "totalPower"]
+    },
+    "Card": {
+      "title": "Card",
+      "description": "Collectible anime trading card",
+      "type": "object",
+      "properties": {
+        "cardId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "characterName": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "power": { "type": "integer" },
+        "strength": { "type": "integer" },
+        "status": { "type": "string", "enum": ["pending", "ordered"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["cardId", "ownerId", "imageUrl", "power", "strength"]
+    }
+  },
+  "firestore": {
+    "/players/{uid}": {
+      "schema": "Player",
+      "description": "Player profiles"
+    },
+    "/cards/{cardId}": {
+      "schema": "Card",
+      "description": "Generated cards"
+    }
+  }
+}
