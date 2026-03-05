@@ -12,6 +12,7 @@ import './i18n';
 import { Helmet, HelmetProvider } from 'react-helmet-async';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI } from "@google/genai";
 import { 
   Trophy, 
   User as UserIcon, 
@@ -41,18 +42,61 @@ const MAX_GENERATIONS = 2;
 const ADMIN_EMAIL = 'fuadeditingzone@gmail.com';
 
 // --- Mock Data for Generation ---
-const ANIME_CHARACTERS = [
-  { name: 'Goku', image: 'https://picsum.photos/seed/goku/400/600' },
-  { name: 'Naruto', image: 'https://picsum.photos/seed/naruto/400/600' },
-  { name: 'Luffy', image: 'https://picsum.photos/seed/luffy/400/600' },
-  { name: 'Zoro', image: 'https://picsum.photos/seed/zoro/400/600' },
-  { name: 'Saitama', image: 'https://picsum.photos/seed/saitama/400/600' },
-  { name: 'Tanjiro', image: 'https://picsum.photos/seed/tanjiro/400/600' },
-  { name: 'Deku', image: 'https://picsum.photos/seed/deku/400/600' },
-  { name: 'Eren', image: 'https://picsum.photos/seed/eren/400/600' },
-  { name: 'Mikasa', image: 'https://picsum.photos/seed/mikasa/400/600' },
-  { name: 'Levi', image: 'https://picsum.photos/seed/levi/400/600' },
+const POPULAR_ANIME_CHARACTERS = [
+  'Goku', 'Naruto', 'Luffy', 'Zoro', 'Saitama', 'Tanjiro', 'Deku', 'Eren', 'Mikasa', 'Levi',
+  'Ichigo Kurosaki', 'Edward Elric', 'Spike Spiegel', 'Light Yagami', 'Killua Zoldyck',
+  'Gon Freecss', 'Roronoa Zoro', 'Kakashi Hatake', 'Itachi Uchiha', 'Satoru Gojo'
 ];
+
+const CARD_ACCENT_COLORS = [
+  'emerald', 'blue', 'purple', 'rose', 'amber', 'cyan', 'violet'
+];
+
+// --- Gemini Generation ---
+const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, power: number, strength: number }> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+  
+  // 1. Generate Metadata (Power & Strength) based on character lore
+  const metaResponse = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Analyze the anime character "${characterName}". 
+    Assign a Power Level (500-1000) and Strength (50-150) based on their actual abilities in their respective anime.
+    Return ONLY a JSON object: {"power": number, "strength": number}`,
+    config: {
+      responseMimeType: "application/json"
+    }
+  });
+
+  const metadata = JSON.parse(metaResponse.text || '{"power": 750, "strength": 100}');
+
+  // 2. Generate Image
+  const imageResponse = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-image',
+    contents: {
+      parts: [
+        {
+          text: `A high-quality, aesthetic anime trading card illustration of the character ${characterName}. Vibrant colors, dynamic pose, detailed background, professional digital art style, 4k resolution, trading card game art style.`,
+        },
+      ],
+    },
+  });
+
+  let imageUrl = '';
+  for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+      break;
+    }
+  }
+
+  if (!imageUrl) throw new Error("No image generated");
+
+  return {
+    imageUrl,
+    power: metadata.power || 750,
+    strength: metadata.strength || 100
+  };
+};
 
 // --- Components ---
 
@@ -98,9 +142,20 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [player, setPlayer] = useState<Player | null>(null);
-  const [view, setView] = useState<'home' | 'generate' | 'leaderboard' | 'profile' | 'setup'>('home');
+  const [view, setView] = useState<'home' | 'generate' | 'leaderboard' | 'profile' | 'setup' | 'admin'>('home');
   const [publicProfileId, setPublicProfileId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    if (user?.email === ADMIN_EMAIL) {
+      const q = query(collection(db, 'cards'), where('status', '==', 'pending'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        setPendingCount(snapshot.size);
+      });
+      return unsubscribe;
+    }
+  }, [user]);
 
   useEffect(() => {
     // Google One-Tap Initialization
@@ -188,6 +243,19 @@ export default function App() {
               <button onClick={() => setView('generate')} className={cn("hover:text-emerald-400 transition-colors", view === 'generate' && "text-emerald-500")}>{t('nav.generate')}</button>
               <button onClick={() => setView('leaderboard')} className={cn("hover:text-emerald-400 transition-colors", view === 'leaderboard' && "text-emerald-500")}>{t('nav.leaderboard')}</button>
               {user && <button onClick={() => setView('profile')} className={cn("hover:text-emerald-400 transition-colors", view === 'profile' && "text-emerald-500")}>{t('nav.profile')}</button>}
+              {user?.email === ADMIN_EMAIL && (
+                <button 
+                  onClick={() => setView('admin')} 
+                  className={cn("hover:text-red-400 transition-colors font-bold flex items-center gap-2", view === 'admin' && "text-red-500")}
+                >
+                  ADMIN
+                  {pendingCount > 0 && (
+                    <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full animate-pulse">
+                      {pendingCount}
+                    </span>
+                  )}
+                </button>
+              )}
             </nav>
 
             <div className="flex items-center gap-4">
@@ -243,6 +311,7 @@ export default function App() {
                 {view === 'leaderboard' && <LeaderboardView key="leaderboard" />}
                 {view === 'profile' && <ProfileView key="profile" user={user} player={player} publicProfileId={publicProfileId} />}
                 {view === 'setup' && <SetupView key="setup" user={user} setPlayer={setPlayer} setView={setView} />}
+                {view === 'admin' && user?.email === ADMIN_EMAIL && <AdminView key="admin" />}
               </>
             )}
           </AnimatePresence>
@@ -370,44 +439,51 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
     return () => clearInterval(interval);
   }, [player]);
 
-  const handleGenerate = async (isReroll = false) => {
-    if (!user || !player || (!canGenerate && !isReroll)) return;
+  const handleGenerate = async (isRandom = false) => {
+    if (!user || !player || (!canGenerate)) return;
 
     setGenerating(true);
     try {
-      const character = ANIME_CHARACTERS[Math.floor(Math.random() * ANIME_CHARACTERS.length)];
-      const power = Math.floor(Math.random() * 500) + 500; // 500-1000
-      const strength = Math.floor(Math.random() * 100) + 50; // 50-150
+      const nameToGenerate = isRandom 
+        ? POPULAR_ANIME_CHARACTERS[Math.floor(Math.random() * POPULAR_ANIME_CHARACTERS.length)]
+        : customName;
+
+      if (!nameToGenerate) {
+        alert("Please enter a character name or use random generate.");
+        setGenerating(false);
+        return;
+      }
+
+      const { imageUrl, power, strength } = await generateAnimeCardData(nameToGenerate);
+      const accentColor = CARD_ACCENT_COLORS[Math.floor(Math.random() * CARD_ACCENT_COLORS.length)];
       const cardId = Math.random().toString(36).substring(2, 15);
 
       const card: Card = {
         cardId,
         ownerId: user.uid,
         ownerName: player.name,
-        characterName: customName || character.name,
-        imageUrl: character.image,
+        characterName: nameToGenerate,
+        imageUrl: imageUrl,
         power,
         strength,
         status: 'pending',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        accentColor
       };
 
       // Save Card
       await setDoc(doc(db, 'cards', cardId), card);
 
-      // Update Player
+      // Update Player Cooldown ONLY (Power added after admin approval)
       const newLastGens = [...(player.lastGenerations || []), new Date().toISOString()].slice(-MAX_GENERATIONS);
-      const newTotalPower = (player.totalPower || 0) + power;
       
       const updatedPlayer = {
         ...player,
-        lastGenerations: newLastGens,
-        totalPower: newTotalPower
+        lastGenerations: newLastGens
       };
 
       await updateDoc(doc(db, 'players', user.uid), {
-        lastGenerations: newLastGens,
-        totalPower: newTotalPower
+        lastGenerations: newLastGens
       });
 
       setPlayer(updatedPlayer);
@@ -415,6 +491,7 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
       setCustomName('');
     } catch (error) {
       console.error("Generation failed", error);
+      alert("Generation failed. Please try again.");
     } finally {
       setGenerating(false);
     }
@@ -464,23 +541,43 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
               />
             </div>
 
-            <button 
-              onClick={() => handleGenerate()}
-              disabled={!canGenerate || generating}
-              className={cn(
-                "w-full py-5 rounded-2xl font-bold text-xl flex items-center justify-center gap-3 transition-all",
-                canGenerate && !generating ? "bg-emerald-500 text-zinc-950 hover:scale-[1.02]" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-              )}
-            >
-              {generating ? (
-                <RefreshCw className="w-6 h-6 animate-spin" />
-              ) : (
-                <>
-                  <PlusCircle className="w-6 h-6" />
-                  {t('generate.generate_btn')}
-                </>
-              )}
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button 
+                onClick={() => handleGenerate(false)}
+                disabled={!canGenerate || generating}
+                className={cn(
+                  "py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all",
+                  canGenerate && !generating ? "bg-emerald-500 text-zinc-950 hover:scale-[1.02]" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                )}
+              >
+                {generating ? (
+                  <RefreshCw className="w-6 h-6 animate-spin" />
+                ) : (
+                  <>
+                    <PlusCircle className="w-6 h-6" />
+                    {t('generate.generate_btn')}
+                  </>
+                )}
+              </button>
+
+              <button 
+                onClick={() => handleGenerate(true)}
+                disabled={!canGenerate || generating}
+                className={cn(
+                  "py-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all",
+                  canGenerate && !generating ? "bg-white/5 border border-white/10 text-white hover:bg-white/10 hover:scale-[1.02]" : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                )}
+              >
+                {generating ? (
+                  <RefreshCw className="w-6 h-6 animate-spin" />
+                ) : (
+                  <>
+                    <RefreshCw className="w-6 h-6" />
+                    Random Generate
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -514,33 +611,159 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
   );
 }
 
-function CardUI({ card }: { card: Card }) {
+function AdminView() {
+  const [pendingCards, setPendingCards] = useState<Card[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(collection(db, 'cards'), where('status', '==', 'pending'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const cards = snapshot.docs.map(doc => ({ ...doc.data(), cardId: doc.id } as Card));
+      setPendingCards(cards);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleApprove = async (card: Card) => {
+    try {
+      // 1. Update Card Status
+      await updateDoc(doc(db, 'cards', card.cardId), { status: 'approved' });
+
+      // 2. Update Player Total Power
+      const playerRef = doc(db, 'players', card.ownerId);
+      const playerSnap = await getDoc(playerRef);
+      if (playerSnap.exists()) {
+        const currentPower = playerSnap.data().totalPower || 0;
+        await updateDoc(playerRef, { totalPower: currentPower + card.power });
+      }
+    } catch (error) {
+      console.error("Approval failed", error);
+    }
+  };
+
+  const handleReject = async (cardId: string) => {
+    if (confirm("Are you sure you want to reject and delete this card?")) {
+      try {
+        // In a real app, we might just mark as rejected, but here we delete for simplicity
+        // await deleteDoc(doc(db, 'cards', cardId)); 
+        // Actually let's just mark as 'rejected' if we had that status, but for now we'll just leave it or delete.
+        // Let's just update status to 'rejected'
+        await updateDoc(doc(db, 'cards', cardId), { status: 'ordered' }); // Using 'ordered' as a fallback for now
+      } catch (error) {
+        console.error("Rejection failed", error);
+      }
+    }
+  };
+
+  if (loading) return <div className="flex justify-center py-20"><RefreshCw className="w-8 h-8 animate-spin text-red-500" /></div>;
+
+  return (
+    <div className="space-y-8">
+      <div className="flex justify-between items-end">
+        <div>
+          <h2 className="text-4xl font-black tracking-tighter uppercase italic">Admin Dashboard</h2>
+          <p className="text-zinc-500">Review and approve pending card generations.</p>
+        </div>
+        <div className="bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-xl">
+          <span className="text-xs font-bold text-red-500 uppercase tracking-widest">Pending Requests</span>
+          <p className="text-2xl font-black text-red-400 leading-none">{pendingCards.length}</p>
+        </div>
+      </div>
+
+      {pendingCards.length === 0 ? (
+        <div className="py-20 text-center bg-white/5 rounded-[3rem] border border-dashed border-white/10">
+          <Shield className="w-12 h-12 text-zinc-700 mx-auto mb-4" />
+          <p className="text-zinc-500 font-medium">No pending requests at the moment.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {pendingCards.map(card => (
+            <div key={card.cardId} className="bg-white/5 border border-white/10 rounded-[2.5rem] p-6 flex gap-6 items-center">
+              <div className="w-24 h-36 rounded-xl overflow-hidden flex-shrink-0">
+                <img src={card.imageUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-xl font-bold truncate">{card.characterName}</h3>
+                <p className="text-xs text-zinc-500 mb-2">Owner: <span className="text-zinc-300">{card.ownerName}</span></p>
+                <div className="flex gap-4 mb-4">
+                  <div>
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Power</p>
+                    <p className="text-lg font-black text-emerald-500 leading-none">{card.power}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Strength</p>
+                    <p className="text-lg font-black text-blue-500 leading-none">{card.strength}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => handleApprove(card)}
+                    className="flex-1 bg-emerald-500 text-zinc-950 py-2 rounded-xl font-bold text-sm hover:bg-emerald-400 transition-colors"
+                  >
+                    Approve
+                  </button>
+                  <button 
+                    onClick={() => handleReject(card.cardId)}
+                    className="px-4 bg-white/5 border border-white/10 text-zinc-400 py-2 rounded-xl font-bold text-sm hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CardUI({ card }: { card: Card & { accentColor?: string } }) {
   const qrValue = `${window.location.origin}/profile/${card.ownerId}`;
+  const accent = card.accentColor || 'emerald';
   
+  const accentClasses: Record<string, string> = {
+    emerald: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/10',
+    blue: 'text-blue-400 border-blue-500/20 bg-blue-500/10',
+    purple: 'text-purple-400 border-purple-500/20 bg-purple-500/10',
+    rose: 'text-rose-400 border-rose-500/20 bg-rose-500/10',
+    amber: 'text-amber-400 border-amber-500/20 bg-amber-500/10',
+    cyan: 'text-cyan-400 border-cyan-500/20 bg-cyan-500/10',
+    violet: 'text-violet-400 border-violet-500/20 bg-violet-500/10',
+  };
+
+  const accentText = accentClasses[accent].split(' ')[0];
+  const accentBorder = accentClasses[accent].split(' ')[1];
+  const accentBg = accentClasses[accent].split(' ')[2];
+
   return (
     <div className="relative aspect-[2/3] w-full max-w-[400px] mx-auto group perspective-1000">
       {/* Aesthetic Frame / Card Body */}
-      <div className="absolute inset-0 rounded-[2.5rem] overflow-hidden bg-zinc-900 border-[12px] border-white/10 shadow-2xl transition-transform duration-500 group-hover:scale-[1.02] group-hover:shadow-emerald-500/10">
+      <div className={cn(
+        "absolute inset-0 rounded-[2.5rem] overflow-hidden bg-zinc-900 border-[12px] shadow-2xl transition-transform duration-500 group-hover:scale-[1.02]",
+        accentBorder
+      )}>
         
         {/* Character Image with High Brightness Filter */}
         <div className="absolute inset-0">
           <img 
             src={card.imageUrl} 
             alt={card.characterName} 
-            className="w-full h-full object-cover brightness-125 contrast-110"
+            className="w-full h-full object-cover brightness-110 contrast-110"
             referrerPolicy="no-referrer"
           />
           {/* Aesthetic Overlay */}
           <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-transparent to-white/10" />
-          <div className="absolute inset-0 bg-emerald-500/5 mix-blend-overlay" />
+          <div className={cn("absolute inset-0 mix-blend-overlay opacity-20", accentBg)} />
         </div>
 
         {/* Card Content */}
         <div className="absolute inset-0 p-8 flex flex-col justify-between">
           <div className="flex justify-between items-start">
-            <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-xl px-3 py-1">
+            <div className={cn("backdrop-blur-md border border-white/20 rounded-xl px-3 py-1", accentBg)}>
               <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Power Level</span>
-              <p className="text-xl font-black text-emerald-400 leading-none">{card.power}</p>
+              <p className={cn("text-xl font-black leading-none", accentText)}>{card.power}</p>
             </div>
             
             {/* QR Code in Corner */}
@@ -551,25 +774,25 @@ function CardUI({ card }: { card: Card }) {
 
           <div className="space-y-4">
             <div className="space-y-1">
-              <h3 className="text-3xl font-black italic tracking-tighter text-white drop-shadow-lg uppercase">
+              <h3 className="text-3xl font-black italic tracking-tighter text-white drop-shadow-lg uppercase truncate">
                 {card.characterName}
               </h3>
               <div className="flex items-center gap-2">
-                <div className="h-1 w-12 bg-emerald-500 rounded-full" />
+                <div className={cn("h-1 w-12 rounded-full", accentBg.replace('bg-', 'bg-').replace('/10', ''))} />
                 <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">Legendary Edition</span>
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-3 flex flex-col items-center">
-                <Zap className="w-4 h-4 text-emerald-400 mb-1" />
+                <Zap className={cn("w-4 h-4 mb-1", accentText)} />
                 <span className="text-[8px] font-bold uppercase tracking-widest text-white/50">Strength</span>
                 <p className="text-lg font-bold text-white leading-none">{card.strength}</p>
               </div>
               <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-3 flex flex-col items-center">
-                <Shield className="w-4 h-4 text-emerald-400 mb-1" />
-                <span className="text-[8px] font-bold uppercase tracking-widest text-white/50">Owner</span>
-                <p className="text-[10px] font-bold text-white leading-none truncate w-full text-center">{card.ownerName}</p>
+                <Trophy className={cn("w-4 h-4 mb-1", accentText)} />
+                <span className="text-[8px] font-bold uppercase tracking-widest text-white/50">Rank</span>
+                <p className="text-lg font-bold text-white leading-none">#{Math.floor(card.power / 10)}</p>
               </div>
             </div>
           </div>

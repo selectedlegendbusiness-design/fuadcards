@@ -16,7 +16,8 @@ export interface Card {
   imageUrl: string;
   power: number;
   strength: number;
-  status: 'pending' | 'ordered';
+  status: 'pending' | 'ordered' | 'approved';
+  accentColor?: string;
   createdAt: string;
 }
 
