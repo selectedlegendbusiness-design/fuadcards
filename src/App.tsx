@@ -33,6 +33,7 @@ import {
 import { formatDistanceToNow, isAfter, addHours, parseISO } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { uploadToR2 } from './services/storageService';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -590,16 +591,20 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         return;
       }
 
-      const { imageUrl, raw_power, strength, prompt_text } = await generateAnimeCardData(nameToGenerate);
+      const { imageUrl: base64ImageUrl, raw_power, strength, prompt_text } = await generateAnimeCardData(nameToGenerate);
       const accentColor = CARD_ACCENT_COLORS[Math.floor(Math.random() * CARD_ACCENT_COLORS.length)];
       const cardId = Math.random().toString(36).substring(2, 15);
+
+      // Upload to R2 if configured
+      const fileName = `cards/${user.uid}/${cardId}.png`;
+      const finalImageUrl = await uploadToR2(base64ImageUrl, fileName);
 
       const card: Card = {
         cardId,
         player_id: user.uid,
         ownerName: player.name,
         characterName: nameToGenerate,
-        imageUrl: imageUrl,
+        imageUrl: finalImageUrl,
         raw_power,
         strength,
         status: 'pending',
