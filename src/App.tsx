@@ -172,14 +172,20 @@ export default function App() {
     const handleOneTapResponse = async (response: any) => {
       try {
         await signInWithOneTap(response.credential);
-      } catch (error) {
+      } catch (error: any) {
         console.error("One Tap Login Failed", error);
+        if (error.code === 'auth/unauthorized-domain') {
+          alert("Login Error: This domain is not authorized in Firebase. Please add 'fuadcards.pages.dev' to Authorized Domains in Firebase Console.");
+        }
       }
     };
 
-    if (window.google && !user) {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const isPlaceholder = !clientId || clientId === 'YOUR_GOOGLE_CLIENT_ID';
+
+    if (window.google && !user && !isPlaceholder) {
       window.google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID',
+        client_id: clientId,
         callback: handleOneTapResponse,
         use_fedcm_for_prompt: true,
         itp_support: true,
@@ -221,15 +227,21 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
-        const playerDoc = await getDoc(doc(db, 'players', u.uid));
-        if (playerDoc.exists()) {
-          const pData = playerDoc.data() as Player;
-          setPlayer(pData);
-          // Use a functional update or just check the current state if needed
-          // But here we can just check u and pData
-          setView(prev => prev === 'setup' ? 'home' : prev);
-        } else {
-          setView('setup');
+        try {
+          const playerDoc = await getDoc(doc(db, 'players', u.uid));
+          if (playerDoc.exists()) {
+            const pData = playerDoc.data() as Player;
+            setPlayer(pData);
+            setView(prev => prev === 'setup' ? 'home' : prev);
+          } else {
+            setView('setup');
+          }
+        } catch (error) {
+          console.error("Error fetching player data:", error);
+          // This might be a permission error
+          if (error instanceof Error && error.message.includes('permission-denied')) {
+            alert("Security Rules Error: You don't have permission to read your player profile. Please check firestore.rules.");
+          }
         }
       } else {
         setPlayer(null);
@@ -320,7 +332,28 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div id="google-login-button" data-itp_support="true"></div>
+                <div className="flex items-center gap-4">
+                  {(!import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.VITE_GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID') ? (
+                    <button 
+                      onClick={async () => {
+                        try {
+                          await signInWithGoogle();
+                        } catch (error: any) {
+                          if (error.code === 'auth/unauthorized-domain') {
+                            alert("Login Error: This domain is not authorized in Firebase. Please add 'fuadcards.pages.dev' to Authorized Domains in Firebase Console.");
+                          } else {
+                            alert("Login failed: " + error.message);
+                          }
+                        }
+                      }}
+                      className="px-6 py-2 bg-emerald-500 text-zinc-950 rounded-full font-bold text-sm hover:bg-emerald-400 transition-all"
+                    >
+                      {t('nav.login')}
+                    </button>
+                  ) : (
+                    <div id="google-login-button" data-itp_support="true"></div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -556,7 +589,14 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
       };
 
       // Save Card
-      await setDoc(doc(db, 'cards', cardId), card);
+      try {
+        await setDoc(doc(db, 'cards', cardId), card);
+      } catch (error) {
+        console.error("Error saving card:", error);
+        alert("Failed to save card. This is likely a Firestore Security Rules issue. Please ensure the rules match the data structure.");
+        setGenerating(false);
+        return;
+      }
 
       // Update Player Cooldown ONLY (Power added after admin approval)
       const newLastGens = [...(player.lastGenerations || []), new Date().toISOString()].slice(-MAX_GENERATIONS);
@@ -566,9 +606,15 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         lastGenerations: newLastGens
       };
 
-      await updateDoc(doc(db, 'players', user.uid), {
-        lastGenerations: newLastGens
-      });
+      try {
+        await updateDoc(doc(db, 'players', user.uid), {
+          lastGenerations: newLastGens
+        });
+      } catch (error) {
+        console.error("Error updating player cooldown:", error);
+        // We don't want to block the user if just the cooldown update fails, 
+        // but it's a sign of a rules issue.
+      }
 
       setPlayer(updatedPlayer);
       setNewCard(card);

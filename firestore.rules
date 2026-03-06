@@ -2,7 +2,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
+    // ===============================================================
     // Helper Functions
+    // ===============================================================
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -11,6 +13,15 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
     
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "fuadeditingzone@gmail.com" || 
+         request.auth.token.email == "selectedlegendbusiness@gmail.com");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
     function isValidPlayer(data) {
       return data.keys().hasAll(['uid', 'name', 'totalPower']) &&
              data.uid is string &&
@@ -19,32 +30,36 @@ service cloud.firestore {
     }
 
     function isValidCard(data) {
-      return data.keys().hasAll(['cardId', 'ownerId', 'imageUrl', 'power', 'strength']) &&
+      return data.keys().hasAll(['cardId', 'player_id', 'imageUrl', 'raw_power', 'strength', 'status']) &&
              data.cardId is string &&
-             data.ownerId is string &&
+             data.player_id is string &&
              data.imageUrl is string &&
-             data.power is int &&
-             data.strength is int;
+             data.raw_power is int &&
+             data.strength is int &&
+             data.status in ['pending', 'ordered', 'approved'];
     }
+
+    // ===============================================================
+    // Collections
+    // ===============================================================
 
     // Players Collection
     match /players/{uid} {
-      allow read: if true; // Public profiles for QR code scanning
+      allow read: if true; // Public profiles for QR code scanning and leaderboard
       allow create: if isOwner(uid) && isValidPlayer(request.resource.data);
-      allow update: if isOwner(uid) && isValidPlayer(request.resource.data);
+      allow update: if isOwner(uid) || isAdmin();
     }
 
     // Cards Collection
     match /cards/{cardId} {
       allow read: if true; // Cards are public for sharing/viewing
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidCard(request.resource.data);
+      allow create: if isAuthenticated() && request.resource.data.player_id == request.auth.uid && isValidCard(request.resource.data);
       allow update: if isAuthenticated() && (
+        isAdmin() ||
         // Owner can update status to 'ordered'
-        (resource.data.ownerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])) ||
-        // Admin logic could go here if needed
-        false
+        (resource.data.player_id == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
       );
-      allow delete: if false; // Cards are permanent
+      allow delete: if isAdmin();
     }
   }
 }
