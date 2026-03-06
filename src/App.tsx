@@ -183,26 +183,48 @@ export default function App() {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
     const isPlaceholder = !clientId || clientId === 'YOUR_GOOGLE_CLIENT_ID';
 
-    if (window.google && !user && !isPlaceholder) {
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: handleOneTapResponse,
-        use_fedcm_for_prompt: true,
-        itp_support: true,
-      });
+    const initGoogle = () => {
+      if (window.google && !user && !isPlaceholder) {
+        console.log("Initializing Google One Tap with Client ID:", clientId);
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          callback: handleOneTapResponse,
+          auto_select: false,
+          use_fedcm_for_prompt: true,
+          itp_support: true,
+        });
 
-      const buttonDiv = document.getElementById("google-login-button");
-      if (buttonDiv) {
-        window.google.accounts.id.renderButton(buttonDiv, {
-          theme: "outline",
-          size: "large",
-          shape: "pill",
-          text: "signin_with",
-          logo_alignment: "left",
+        const buttonDiv = document.getElementById("google-login-button");
+        if (buttonDiv) {
+          window.google.accounts.id.renderButton(buttonDiv, {
+            theme: "outline",
+            size: "large",
+            shape: "pill",
+            text: "signin_with",
+            logo_alignment: "left",
+          });
+        }
+
+        window.google.accounts.id.prompt((notification: any) => {
+          if (notification.isNotDisplayed()) {
+            console.log("One Tap not displayed:", notification.getNotDisplayedReason());
+          } else if (notification.isSkippedMoment()) {
+            console.log("One Tap skipped:", notification.getSkippedReason());
+          } else if (notification.isDismissedMoment()) {
+            console.log("One Tap dismissed:", notification.getDismissedReason());
+          }
         });
       }
+    };
 
-      window.google.accounts.id.prompt();
+    if (window.google) {
+      initGoogle();
+    } else {
+      // If script not loaded yet, wait for it
+      const script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+      if (script) {
+        script.addEventListener('load', initGoogle);
+      }
     }
   }, [user, view]);
 
@@ -333,26 +355,26 @@ export default function App() {
                 </div>
               ) : (
                 <div className="flex items-center gap-4">
-                  {(!import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.VITE_GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID') ? (
-                    <button 
-                      onClick={async () => {
-                        try {
-                          await signInWithGoogle();
-                        } catch (error: any) {
-                          if (error.code === 'auth/unauthorized-domain') {
-                            alert("Login Error: This domain is not authorized in Firebase. Please add 'fuadcards.pages.dev' to Authorized Domains in Firebase Console.");
-                          } else {
-                            alert("Login failed: " + error.message);
-                          }
+                  <button 
+                    onClick={async () => {
+                      try {
+                        console.log("Initiating Google Login via Firebase...");
+                        await signInWithGoogle();
+                      } catch (error: any) {
+                        console.error("Login error:", error);
+                        if (error.code === 'auth/unauthorized-domain') {
+                          alert("Login Error: This domain is not authorized in Firebase. Please add your domain to Authorized Domains in Firebase Console.");
+                        } else {
+                          alert("Login failed: " + error.message);
                         }
-                      }}
-                      className="px-6 py-2 bg-emerald-500 text-zinc-950 rounded-full font-bold text-sm hover:bg-emerald-400 transition-all"
-                    >
-                      {t('nav.login')}
-                    </button>
-                  ) : (
-                    <div id="google-login-button" data-itp_support="true"></div>
-                  )}
+                      }
+                    }}
+                    className="px-6 py-2 bg-emerald-500 text-zinc-950 rounded-full font-bold text-sm hover:bg-emerald-400 transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                  >
+                    <UserIcon className="w-4 h-4" />
+                    {t('nav.login')}
+                  </button>
+                  <div id="google-login-button" className="hidden"></div>
                 </div>
               )}
             </div>
@@ -633,7 +655,19 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         <Shield className="w-16 h-16 text-zinc-700 mb-6" />
         <h2 className="text-3xl font-bold mb-4">{t('nav.login')}</h2>
         <p className="text-zinc-400 mb-8">Please log in to generate cards.</p>
-        <button onClick={signInWithGoogle} className="px-8 py-3 bg-emerald-500 text-zinc-950 rounded-full font-bold">{t('nav.login')}</button>
+        <button 
+          onClick={async () => {
+            try {
+              await signInWithGoogle();
+            } catch (error: any) {
+              alert("Login failed: " + error.message);
+            }
+          }} 
+          className="px-8 py-3 bg-emerald-500 text-zinc-950 rounded-full font-bold flex items-center gap-2 hover:bg-emerald-400 transition-all"
+        >
+          <UserIcon className="w-5 h-5" />
+          {t('nav.login')}
+        </button>
       </div>
     );
   }
