@@ -15,9 +15,10 @@
           "items": { "type": "string", "format": "date-time" },
           "description": "Timestamps of the last 2 card generations"
         },
-        "photoURL": { "type": "string" }
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] }
       },
-      "required": ["uid", "name", "totalPower"]
+      "required": ["uid", "name", "totalPower", "role"]
     },
     "Card": {
       "title": "Card",
@@ -25,16 +26,20 @@
       "type": "object",
       "properties": {
         "cardId": { "type": "string" },
-        "ownerId": { "type": "string" },
+        "player_id": { "type": "string" },
         "ownerName": { "type": "string" },
         "characterName": { "type": "string" },
         "imageUrl": { "type": "string" },
-        "power": { "type": "integer" },
+        "raw_power": { "type": "integer" },
         "strength": { "type": "integer" },
-        "status": { "type": "string", "enum": ["pending", "ordered"] },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "status": { "type": "string", "enum": ["pending", "ordered", "approved"] },
+        "is_approved": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "accentColor": { "type": "string" },
+        "prompt_text": { "type": "string" },
+        "qr_data": { "type": "string" }
       },
-      "required": ["cardId", "ownerId", "imageUrl", "power", "strength"]
+      "required": ["cardId", "player_id", "imageUrl", "raw_power", "strength"]
     }
   },
   "firestore": {

@@ -28,6 +28,13 @@ interface FirestoreErrorInfo {
     email: string | null | undefined;
     emailVerified: boolean | undefined;
     isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
   }
 }
 
@@ -39,6 +46,13 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       email: auth.currentUser?.email,
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
     },
     operationType,
     path
@@ -48,7 +62,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   if (errInfo.error.includes('permission-denied') || errInfo.error.includes('Missing or insufficient permissions')) {
     const msg = `Security Rules Error: Access denied to ${path} during ${operationType}. Please check firestore.rules.`;
     console.error(msg);
-    throw new Error(msg);
+    throw new Error(JSON.stringify(errInfo));
   }
   
   throw error;
@@ -76,3 +90,16 @@ export const signInWithOneTap = async (credential: string) => {
 };
 
 export const logout = () => signOut(auth);
+
+// Test connection to Firestore
+import { getDocFromServer } from 'firebase/firestore';
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration. The client is offline.");
+    }
+  }
+}
+testConnection();

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { auth, db, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp } from './firebase';
+import { auth, db, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Player, Card } from './types';
 import { useTranslation } from 'react-i18next';
@@ -12,7 +12,6 @@ import './i18n';
 import { Helmet, HelmetProvider } from 'react-helmet-async';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI, Modality } from "@google/genai";
 import { 
   Trophy, 
   User as UserIcon, 
@@ -57,55 +56,22 @@ const CARD_ACCENT_COLORS = [
 
 // --- Gemini Generation ---
 const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, raw_power: number, strength: number, prompt_text: string }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-  
-  // 1. Generate a detailed Card Description and Metadata
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-image-preview',
-    contents: {
-      parts: [
-        {
-          text: `You are a master anime card designer.
-          1. Create a long, detailed artistic prompt for a high-quality anime character trading card of "${characterName}". 
-          Use high-key lighting, minimal black colors, and an aesthetic/pastel palette. 
-          The description should be evocative, describing the character's pose, the background, the lighting, and the overall vibe.
-          
-          2. Based on this description, determine a Power Level (between 1 and 9999) and a Strength Rating (between 1 and 1000) that accurately reflects their lore.
-          
-          Return the description and stats as a JSON string in the text part, and also generate the image.
-          JSON format: {"description": "...", "power": 8500, "strength": 750}`
-        }
-      ]
-    },
-    config: {
-      responseModalities: [Modality.TEXT, Modality.IMAGE],
-    }
-  });
+  try {
+    const response = await fetch('/api/generate-card', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ characterName })
+    });
 
-  let imageUrl = '';
-  let metadata = { description: '', power: 1000, strength: 500 };
-
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-    } else if (part.text) {
-      try {
-        const cleanText = part.text.replace(/```json|```/g, '').trim();
-        metadata = JSON.parse(cleanText);
-      } catch (e) {
-        console.error("Failed to parse metadata", e);
-      }
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || "Failed to generate card.");
     }
+
+    return await response.json();
+  } catch (error: any) {
+    throw error;
   }
-
-  if (!imageUrl) throw new Error("No image generated");
-
-  return {
-    imageUrl,
-    raw_power: metadata.power || 1000,
-    strength: metadata.strength || 500,
-    prompt_text: metadata.description || `A high-quality, aesthetic anime trading card of ${characterName}.`
-  };
 };
 
 // --- Components ---
@@ -157,12 +123,15 @@ export default function App() {
   const [verifyCardId, setVerifyCardId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     if (user?.email === ADMIN_EMAIL) {
       const q = query(collection(db, 'cards'), where('status', '==', 'pending'));
       const unsubscribe = onSnapshot(q, (snapshot) => {
         setPendingCount(snapshot.size);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'cards');
       });
       return unsubscribe;
     }
@@ -260,11 +229,7 @@ export default function App() {
             setView('setup');
           }
         } catch (error) {
-          console.error("Error fetching player data:", error);
-          // This might be a permission error
-          if (error instanceof Error && error.message.includes('permission-denied')) {
-            alert("Security Rules Error: You don't have permission to read your player profile. Please check firestore.rules.");
-          }
+          handleFirestoreError(error, OperationType.GET, `players/${u.uid}`);
         }
       } else {
         setPlayer(null);
@@ -310,6 +275,10 @@ export default function App() {
               <button onClick={() => setView('generate')} className={cn("hover:text-emerald-400 transition-colors", view === 'generate' && "text-emerald-500")}>{t('nav.generate')}</button>
               <button onClick={() => setView('leaderboard')} className={cn("hover:text-emerald-400 transition-colors", view === 'leaderboard' && "text-emerald-500")}>{t('nav.leaderboard')}</button>
               {user && <button onClick={() => setView('profile')} className={cn("hover:text-emerald-400 transition-colors", view === 'profile' && "text-emerald-500")}>{t('nav.profile')}</button>}
+              <button onClick={() => setShowHelp(true)} className="hover:text-emerald-400 transition-colors flex items-center gap-1">
+                <AlertCircle className="w-4 h-4" />
+                Help
+              </button>
               {user?.email === ADMIN_EMAIL && (
                 <button 
                   onClick={() => setView('admin')} 
@@ -371,7 +340,7 @@ export default function App() {
                       }
                     }}
                     className="px-6 py-2 bg-emerald-500 text-zinc-950 rounded-full font-bold text-sm hover:bg-emerald-400 transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
-                  >
+                    >
                     <UserIcon className="w-4 h-4" />
                     {t('nav.login')}
                   </button>
@@ -420,6 +389,65 @@ export default function App() {
             </div>
           </div>
         </footer>
+        {/* Help Modal */}
+        <AnimatePresence>
+          {showHelp && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowHelp(false)}
+                className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="relative w-full max-w-2xl bg-zinc-900 border border-white/10 rounded-[2rem] p-8 shadow-2xl"
+              >
+                <div className="flex justify-between items-start mb-6">
+                  <h2 className="text-3xl font-bold tracking-tighter">Setup & API Keys</h2>
+                  <button onClick={() => setShowHelp(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
+                    <LogOut className="w-6 h-6 rotate-180" />
+                  </button>
+                </div>
+
+                <div className="space-y-8">
+                  <section>
+                    <h3 className="text-lg font-bold text-emerald-500 mb-3 flex items-center gap-2">
+                      <Zap className="w-5 h-5" />
+                      How to get an API Key
+                    </h3>
+                    <ol className="list-decimal list-inside space-y-3 text-zinc-400">
+                      <li>Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">Google AI Studio</a>.</li>
+                      <li>Create a new API key (ensure it's from a project with billing enabled for high-quality models).</li>
+                      <li>In this app, click the "Select API Key" button in the banner or during generation.</li>
+                      <li>For more info on billing, see <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">Gemini Billing Docs</a>.</li>
+                    </ol>
+                  </section>
+
+                  <section>
+                    <h3 className="text-lg font-bold text-emerald-500 mb-3 flex items-center gap-2">
+                      <Globe className="w-5 h-5" />
+                      Google Cloud Projects
+                    </h3>
+                    <p className="text-zinc-400">
+                      If your project isn't showing in the console, ensure you are logged into the correct Google account. 
+                      You can manage your projects at the <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">Google Cloud Console</a>.
+                    </p>
+                  </section>
+
+                  <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl">
+                    <p className="text-xs text-zinc-500">
+                      Note: Image generation uses the <code>gemini-3.1-flash-image-preview</code> model, which requires a paid API key for high-quality output.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     </HelmetProvider>
   );
@@ -434,12 +462,16 @@ function VerifyView({ cardId }: { cardId: string | null, key?: string }) {
   useEffect(() => {
     if (!cardId) return;
     const fetchCard = async () => {
-      const docRef = doc(db, 'cards', cardId);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setCard(docSnap.data() as Card);
+      try {
+        const docRef = doc(db, 'cards', cardId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setCard(docSnap.data() as Card);
+        }
+        setLoading(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `cards/${cardId}`);
       }
-      setLoading(false);
     };
     fetchCard();
   }, [cardId]);
@@ -579,6 +611,7 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
   const handleGenerate = async (isRandom = false) => {
     if (!user || !player || (!canGenerate)) return;
 
+    // Check if API key is selected
     setGenerating(true);
     try {
       const nameToGenerate = isRandom 
@@ -619,10 +652,7 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
       try {
         await setDoc(doc(db, 'cards', cardId), card);
       } catch (error) {
-        console.error("Error saving card:", error);
-        alert("Failed to save card. This is likely a Firestore Security Rules issue. Please ensure the rules match the data structure.");
-        setGenerating(false);
-        return;
+        handleFirestoreError(error, OperationType.CREATE, `cards/${cardId}`);
       }
 
       // Update Player Cooldown ONLY (Power added after admin approval)
@@ -638,17 +668,20 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
           lastGenerations: newLastGens
         });
       } catch (error) {
-        console.error("Error updating player cooldown:", error);
-        // We don't want to block the user if just the cooldown update fails, 
-        // but it's a sign of a rules issue.
+        handleFirestoreError(error, OperationType.UPDATE, `players/${user.uid}`);
       }
 
       setPlayer(updatedPlayer);
       setNewCard(card);
       setCustomName('');
-    } catch (error) {
+    } catch (error: any) {
       console.error("Generation failed", error);
-      alert("Generation failed. Please try again.");
+      if (error.message === 'API_KEY_EXPIRED') {
+        alert("Your API key session has expired or is invalid. Please select your API key again.");
+        if (window.aistudio) await window.aistudio.openSelectKey();
+      } else {
+        alert("Generation failed: " + error.message);
+      }
     } finally {
       setGenerating(false);
     }
@@ -683,17 +716,6 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
       animate={{ opacity: 1 }}
       className="max-w-4xl mx-auto"
     >
-      {generating && (
-        <div className="fixed inset-0 z-[100] bg-zinc-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center">
-          <div className="relative w-24 h-24 mb-8">
-            <div className="absolute inset-0 border-4 border-emerald-500/20 rounded-full" />
-            <div className="absolute inset-0 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-            <Zap className="absolute inset-0 m-auto w-8 h-8 text-emerald-500 animate-pulse" />
-          </div>
-          <h2 className="text-3xl font-black tracking-tighter mb-2 uppercase italic">Gemini is crafting your character...</h2>
-          <p className="text-zinc-500 max-w-xs mx-auto">This takes a moment as we generate high-quality aesthetic art and lore-accurate stats.</p>
-        </div>
-      )}
       <div className="flex flex-col md:flex-row gap-12 items-start">
         <div className="flex-1 w-full">
           <h2 className="text-4xl font-bold mb-2">{t('generate.title')}</h2>
@@ -763,7 +785,23 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
 
         <div className="flex-1 w-full sticky top-24">
           <AnimatePresence mode="wait">
-            {newCard ? (
+            {generating ? (
+              <motion.div
+                key="generating"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="aspect-[2/3] w-full rounded-[2.5rem] bg-zinc-900 border-2 border-emerald-500/20 flex flex-col items-center justify-center p-8 text-center"
+              >
+                <div className="relative w-20 h-20 mb-6">
+                  <div className="absolute inset-0 border-4 border-emerald-500/10 rounded-full" />
+                  <div className="absolute inset-0 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  <Zap className="absolute inset-0 m-auto w-6 h-6 text-emerald-500 animate-pulse" />
+                </div>
+                <h3 className="text-xl font-bold mb-2 tracking-tight">Crafting Card...</h3>
+                <p className="text-zinc-500 text-sm">Generating aesthetic art and stats.</p>
+              </motion.div>
+            ) : newCard ? (
               <motion.div
                 key="card"
                 initial={{ scale: 0.8, opacity: 0, rotateY: 90 }}
@@ -803,6 +841,8 @@ function AdminView() {
       const sortedCards = cards.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setPendingCards(sortedCards);
       setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'cards');
     });
     return unsubscribe;
   }, []);
@@ -823,7 +863,7 @@ function AdminView() {
         await updateDoc(playerRef, { totalPower: currentPower + card.raw_power });
       }
     } catch (error) {
-      console.error("Approval failed", error);
+      handleFirestoreError(error, OperationType.UPDATE, `cards/${card.cardId}`);
     }
   };
 
@@ -832,7 +872,7 @@ function AdminView() {
       try {
         await updateDoc(doc(db, 'cards', cardId), { status: 'ordered' }); 
       } catch (error) {
-        console.error("Rejection failed", error);
+        handleFirestoreError(error, OperationType.UPDATE, `cards/${cardId}`);
       }
     }
   };
@@ -845,7 +885,7 @@ function AdminView() {
       await Promise.all(batch);
       alert("All player powers have been reset to 0.");
     } catch (error) {
-      console.error("Wipe failed", error);
+      handleFirestoreError(error, OperationType.UPDATE, 'players');
     }
   };
 
@@ -1064,6 +1104,8 @@ function LeaderboardView({ key }: { key?: string }) {
       const pData = snapshot.docs.map(doc => doc.data() as Player);
       setPlayers(pData);
       setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'players');
     });
     return unsubscribe;
   }, []);
@@ -1144,16 +1186,20 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
     if (!targetUid) return;
 
     const fetchProfile = async () => {
-      const docRef = doc(db, 'players', targetUid);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data() as Player;
-        setProfilePlayer(data);
-        setEditName(data.name);
-        setEditAge(data.age?.toString() || '');
-        setEditFavAnime(data.favAnime || '');
+      try {
+        const docRef = doc(db, 'players', targetUid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data() as Player;
+          setProfilePlayer(data);
+          setEditName(data.name);
+          setEditAge(data.age?.toString() || '');
+          setEditFavAnime(data.favAnime || '');
+        }
+        setLoading(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, `players/${targetUid}`);
       }
-      setLoading(false);
     };
 
     fetchProfile();
@@ -1167,13 +1213,19 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
 
       // Reconciliation: If no cards exist for this player, ensure totalPower is 0
       if (fetchedCards.length === 0 && targetUid === user?.uid) {
-        const playerRef = doc(db, 'players', targetUid);
-        const playerSnap = await getDoc(playerRef);
-        if (playerSnap.exists() && playerSnap.data().totalPower !== 0) {
-          await updateDoc(playerRef, { totalPower: 0 });
-          setProfilePlayer(prev => prev ? { ...prev, totalPower: 0 } : null);
+        try {
+          const playerRef = doc(db, 'players', targetUid);
+          const playerSnap = await getDoc(playerRef);
+          if (playerSnap.exists() && playerSnap.data().totalPower !== 0) {
+            await updateDoc(playerRef, { totalPower: 0 });
+            setProfilePlayer(prev => prev ? { ...prev, totalPower: 0 } : null);
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.UPDATE, `players/${targetUid}`);
         }
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'cards');
     });
     return unsubscribe;
   }, [targetUid]);
@@ -1184,7 +1236,7 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
       await updateDoc(doc(db, 'cards', card.cardId), { status: 'ordered' });
       window.open(`mailto:${ADMIN_EMAIL}?subject=Card Order Request&body=I would like to order card: ${card.cardId} (${card.characterName})`);
     } catch (error) {
-      console.error("Order failed", error);
+      handleFirestoreError(error, OperationType.UPDATE, `cards/${card.cardId}`);
     }
   };
 
@@ -1204,7 +1256,7 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
         setProfilePlayer({ ...profilePlayer, totalPower: newPower });
       }
     } catch (error) {
-      console.error("Delete failed", error);
+      handleFirestoreError(error, OperationType.DELETE, `cards/${card.cardId}`);
     }
   };
 
@@ -1227,7 +1279,7 @@ function ProfileView({ user, player: loggedInPlayer, publicProfileId, key }: { u
       setProfilePlayer({ ...profilePlayer, ...updatedData });
       setIsEditing(false);
     } catch (error) {
-      console.error("Update failed", error);
+      handleFirestoreError(error, OperationType.UPDATE, `players/${user.uid}`);
     } finally {
       setSaving(false);
     }
@@ -1421,14 +1473,15 @@ function SetupView({ user, setPlayer, setView }: { user: User | null, setPlayer:
         favAnime,
         totalPower: 0,
         lastGenerations: [],
-        photoURL: user.photoURL || undefined
+        photoURL: user.photoURL || undefined,
+        role: user.email === ADMIN_EMAIL ? 'admin' : 'user'
       };
 
       await setDoc(doc(db, 'players', user.uid), playerData);
       setPlayer(playerData);
       setView('home');
     } catch (error) {
-      console.error("Setup failed", error);
+      handleFirestoreError(error, OperationType.CREATE, `players/${user.uid}`);
     } finally {
       setSaving(false);
     }

@@ -6,6 +6,7 @@ export interface Player {
   totalPower: number;
   lastGenerations: string[]; // ISO strings
   photoURL?: string;
+  role: 'user' | 'admin';
 }
 
 export interface Card {
@@ -27,5 +28,9 @@ export interface Card {
 declare global {
   interface Window {
     google: any;
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
   }
 }
