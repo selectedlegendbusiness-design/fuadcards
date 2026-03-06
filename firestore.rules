@@ -85,7 +85,7 @@ service cloud.firestore {
       return hasRequiredFields(data, ['cardId', 'player_id', 'imageUrl', 'raw_power', 'strength', 'status', 'is_approved', 'createdAt']) &&
              data.cardId is string && data.cardId.size() <= 100 &&
              data.player_id is string && data.player_id.size() <= 100 &&
-             isValidUrl(data.imageUrl) && data.imageUrl.size() <= 1000 &&
+             isValidUrl(data.imageUrl) && data.imageUrl.size() <= 2000 &&
              data.raw_power is int &&
              data.strength is int &&
              data.status in ['pending', 'ordered', 'approved'] &&

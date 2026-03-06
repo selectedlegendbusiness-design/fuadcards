@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { auth, db, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, rtdb, signInWithGoogle, signInWithOneTap, logout, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, handleFirestoreError, OperationType, ref, set as rtdbSet } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { Player, Card } from './types';
 import { useTranslation } from 'react-i18next';
@@ -657,11 +657,19 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         qr_data: `${window.location.origin}/verify/${cardId}`
       };
 
-      // Save Card
+      // Save Card to Firestore
       try {
         await setDoc(doc(db, 'cards', cardId), card);
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, `cards/${cardId}`);
+      }
+
+      // Save Card to Realtime Database (as requested by user)
+      try {
+        await rtdbSet(ref(rtdb, `cards/${cardId}`), card);
+        console.log("Card saved to Realtime Database successfully");
+      } catch (error) {
+        console.error("Error saving to Realtime Database:", error);
       }
 
       // Update Player Cooldown ONLY (Power added after admin approval)
