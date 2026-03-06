@@ -685,8 +685,19 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
       setCustomName('');
     } catch (error: any) {
       console.error("Generation failed", error);
-      if (error.message === 'API_KEY_EXPIRED') {
-        alert("Your API key session has expired or is invalid. Please select your API key again.");
+      
+      // Handle server-side error codes
+      if (error.message.includes("INVALID_API_KEY") || error.message.includes("API key not valid")) {
+        alert("Your Gemini API key is invalid or has expired. Please select a valid API key from a project with billing enabled for high-quality image generation.");
+        if (window.aistudio) {
+          try {
+            await window.aistudio.openSelectKey();
+          } catch (e) {
+            console.error("Failed to open key selector", e);
+          }
+        }
+      } else if (error.message.includes("not configured")) {
+        alert("Gemini API Key is not configured. Please select your API key using the 'Select API Key' button.");
         if (window.aistudio) await window.aistudio.openSelectKey();
       } else {
         alert("Generation failed: " + error.message);
