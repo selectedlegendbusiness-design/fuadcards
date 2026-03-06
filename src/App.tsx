@@ -63,13 +63,22 @@ const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl:
       body: JSON.stringify({ characterName })
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "Failed to generate card.");
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Non-JSON response received:", text);
+      throw new Error(`Server returned non-JSON response (Status ${response.status}). Check server logs.`);
     }
 
-    return await response.json();
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to generate card.");
+    }
+
+    return data;
   } catch (error: any) {
+    console.error("API Call Error:", error);
     throw error;
   }
 };
