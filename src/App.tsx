@@ -13,6 +13,17 @@ import { Helmet, HelmetProvider } from 'react-helmet-async';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI, Type } from "@google/genai";
+
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+    google: any;
+  }
+}
+
 import { 
   Trophy, 
   User as UserIcon, 
@@ -65,85 +76,103 @@ const generateAnimeCardData = async (
   rarity: string, 
   userDescription: string
 ): Promise<{ imageUrl: string, raw_power: number, strength: number, prompt_text: string }> => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("Gemini API Key not configured. Please select your API key.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
-
-  // Step 1: Use Intelligence to generate detailed prompt and power level
-  const textModel = "gemini-3-flash-preview";
-  const intelligenceResponse = await ai.models.generateContent({
-    model: textModel,
-    contents: [{
-      parts: [{
-        text: `You are an expert anime lore researcher and card designer.
-        Based on the following user input, determine the character's actual power level in their anime lore on a scale of 1 to 1000.
-        Also, create a detailed artistic prompt for an image generation model to create a high-quality, aesthetic trading card.
-        
-        Character: ${characterName}
-        Anime: ${animeSource}
-        Rarity: ${rarity}
-        User's Idea: ${userDescription}
-        
-        Return the result as a JSON object with:
-        - power_level: integer (1-1000)
-        - strength_rating: integer (1-1000)
-        - detailed_image_prompt: string (A long, descriptive prompt for image generation. Focus on aesthetic, high-key lighting, and character-specific details.)
-        
-        JSON format: {"power_level": 850, "strength_rating": 720, "detailed_image_prompt": "..."}`
-      }]
-    }],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          power_level: { type: Type.INTEGER },
-          strength_rating: { type: Type.INTEGER },
-          detailed_image_prompt: { type: Type.STRING }
-        },
-        required: ["power_level", "strength_rating", "detailed_image_prompt"]
-      }
-    }
-  });
-
-  const intelligenceData = JSON.parse(intelligenceResponse.text);
+  // Always create a new instance to get the latest API key from the platform
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
   
-  // Step 2: Generate the Image using the detailed prompt
-  const imageModel = "gemini-3.1-flash-image-preview";
-  const imageResponse = await ai.models.generateContent({
-    model: imageModel,
-    contents: {
-      parts: [{ text: intelligenceData.detailed_image_prompt }]
-    },
-    config: {
-      imageConfig: {
-        aspectRatio: "3:4",
-        imageSize: "1K"
+  if (!apiKey) {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // After opening, we try to get the key again. 
+      // The platform injects it into process.env.API_KEY
+    } else {
+      throw new Error("Gemini API Key not configured. Please set GEMINI_API_KEY in your environment.");
+    }
+  }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY || '' });
+
+  try {
+    // Step 1: Use Intelligence to generate detailed prompt and power level
+    const textModel = "gemini-3-flash-preview";
+    const intelligenceResponse = await ai.models.generateContent({
+      model: textModel,
+      contents: [{
+        parts: [{
+          text: `You are an expert anime lore researcher and card designer.
+          Based on the following user input, determine the character's actual power level in their anime lore on a scale of 1 to 1000.
+          Also, create a detailed artistic prompt for an image generation model to create a high-quality, aesthetic trading card.
+          
+          Character: ${characterName}
+          Anime: ${animeSource}
+          Rarity: ${rarity}
+          User's Idea: ${userDescription}
+          
+          Return the result as a JSON object with:
+          - power_level: integer (1-1000)
+          - strength_rating: integer (1-1000)
+          - detailed_image_prompt: string (A long, descriptive prompt for image generation. Focus on aesthetic, high-key lighting, and character-specific details.)
+          
+          JSON format: {"power_level": 850, "strength_rating": 720, "detailed_image_prompt": "..."}`
+        }]
+      }],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            power_level: { type: Type.INTEGER },
+            strength_rating: { type: Type.INTEGER },
+            detailed_image_prompt: { type: Type.STRING }
+          },
+          required: ["power_level", "strength_rating", "detailed_image_prompt"]
+        }
+      }
+    });
+
+    const intelligenceData = JSON.parse(intelligenceResponse.text);
+    
+    // Step 2: Generate the Image using the detailed prompt
+    const imageModel = "gemini-3.1-flash-image-preview";
+    const imageResponse = await ai.models.generateContent({
+      model: imageModel,
+      contents: {
+        parts: [{ text: intelligenceData.detailed_image_prompt }]
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "3:4",
+          imageSize: "1K"
+        }
+      }
+    });
+
+    let imageUrl = "";
+    for (const part of imageResponse.candidates[0].content.parts) {
+      if (part.inlineData) {
+        imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+        break;
       }
     }
-  });
 
-  let imageUrl = "";
-  for (const part of imageResponse.candidates[0].content.parts) {
-    if (part.inlineData) {
-      imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-      break;
+    if (!imageUrl) {
+      throw new Error("Failed to generate image. Please try again.");
     }
-  }
 
-  if (!imageUrl) {
-    throw new Error("Failed to generate image. Please try again.");
+    return {
+      imageUrl,
+      raw_power: intelligenceData.power_level,
+      strength: intelligenceData.strength_rating,
+      prompt_text: intelligenceData.detailed_image_prompt
+    };
+  } catch (error: any) {
+    if (error.message?.includes("Requested entity was not found") || error.message?.includes("permission denied")) {
+      if (window.aistudio) {
+        await window.aistudio.openSelectKey();
+        throw new Error("API Key permission error. Please select a valid API key from a paid project and try again.");
+      }
+    }
+    throw error;
   }
-
-  return {
-    imageUrl,
-    raw_power: intelligenceData.power_level,
-    strength: intelligenceData.strength_rating,
-    prompt_text: intelligenceData.detailed_image_prompt
-  };
 };
 
 // --- Components ---
@@ -196,6 +225,24 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
   const [showHelp, setShowHelp] = useState(false);
+  const [hasSelectedKey, setHasSelectedKey] = useState(true);
+
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasSelectedKey(hasKey);
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      setHasSelectedKey(true);
+    }
+  };
 
   useEffect(() => {
     if (user?.email === ADMIN_EMAIL) {
@@ -351,6 +398,18 @@ export default function App() {
                 <AlertCircle className="w-4 h-4" />
                 Help
               </button>
+              {window.aistudio && (
+                <button 
+                  onClick={handleSelectKey} 
+                  className={cn(
+                    "px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-2",
+                    hasSelectedKey ? "bg-white/5 text-zinc-400 hover:bg-white/10" : "bg-amber-500 text-zinc-950 hover:bg-amber-400 animate-pulse"
+                  )}
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  {hasSelectedKey ? "API Key Selected" : "Select API Key"}
+                </button>
+              )}
               {user?.email === ADMIN_EMAIL && (
                 <button 
                   onClick={() => setView('admin')} 
@@ -497,6 +556,7 @@ export default function App() {
                       <li>Click on <strong>"Get API key"</strong> in the left sidebar.</li>
                       <li>Click <strong>"Create API key"</strong>. You can use the "Free of charge" tier which has generous rate limits for hobbyists.</li>
                       <li>Copy the key and use the "Select API Key" button in this app to paste it.</li>
+                      <li><strong>Fixing Permission Errors:</strong> If you see a "permission denied" error, click the <strong>"Select API Key"</strong> button in the top header and choose a key from a <strong>paid Google Cloud project</strong>. Image generation (Gemini 3.1 Flash Image) requires this.</li>
                       <li><em>Note:</em> High-quality image generation (gemini-3.1-flash-image-preview) might require a project with billing enabled, but you can often use the free tier for standard models.</li>
                     </ol>
                   </section>
