@@ -72,13 +72,13 @@ service cloud.firestore {
     function isValidPlayer(data) {
       return hasRequiredFields(data, ['uid', 'name', 'totalPower', 'role']) &&
              data.uid is string && data.uid == request.auth.uid &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
              data.totalPower is int &&
              data.role in ['user', 'admin'] &&
              (!('age' in data) || data.age is int) &&
-             (!('favAnime' in data) || (data.favAnime is string && data.favAnime.size() <= 100)) &&
+             (!('favAnime' in data) || (data.favAnime is string && data.favAnime.size() <= 200)) &&
              (!('lastGenerations' in data) || data.lastGenerations is list) &&
-             (!('photoURL' in data) || (isValidUrl(data.photoURL) && data.photoURL.size() <= 1000));
+             (!('photoURL' in data) || (isValidUrl(data.photoURL) && data.photoURL.size() <= 2000));
     }
 
     function isValidCard(data) {

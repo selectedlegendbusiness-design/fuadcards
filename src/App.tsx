@@ -70,6 +70,24 @@ const CARD_ACCENT_COLORS = [
 ];
 
 // --- Gemini Generation ---
+
+const withRetry = async <T,>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const isRateLimit = error.message?.includes("429") || 
+                        error.message?.toLowerCase().includes("rate limit") || 
+                        error.message?.toLowerCase().includes("quota");
+    
+    if (retries > 0 && isRateLimit) {
+      console.warn(`Rate limit hit, retrying in ${delay}ms... (${retries} retries left)`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return withRetry(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
+
 const generateAnimeCardData = async (
   characterName: string, 
   animeSource: string, 
@@ -77,85 +95,117 @@ const generateAnimeCardData = async (
   userDescription: string
 ): Promise<{ imageUrl: string, raw_power: number, strength: number, prompt_text: string }> => {
   // Always create a new instance to get the latest API key from the platform
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  const rawApiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  
+  // Sanitize API Key: remove non-ASCII characters that cause "Headers" error
+  // This is critical to fix: "Failed to execute 'append' on 'Headers': String contains non ISO-8859-1 code point."
+  const apiKey = rawApiKey.replace(/[^\x00-\x7F]/g, "").trim();
   
   if (!apiKey) {
     if (window.aistudio) {
       await window.aistudio.openSelectKey();
-      // After opening, we try to get the key again. 
-      // The platform injects it into process.env.API_KEY
-    } else {
-      throw new Error("Gemini API Key not configured. Please set GEMINI_API_KEY in your environment.");
     }
+    throw new Error("Gemini API Key not configured. Please set GEMINI_API_KEY or select a key using the top-right button.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY || '' });
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     // Step 1: Use Intelligence to generate detailed prompt and power level
     const textModel = "gemini-3-flash-preview";
-    const intelligenceResponse = await ai.models.generateContent({
-      model: textModel,
-      contents: [{
-        parts: [{
-          text: `You are an expert anime lore researcher and card designer.
-          Based on the following user input, determine the character's actual power level in their anime lore on a scale of 1 to 1000.
-          Also, create a detailed artistic prompt for an image generation model to create a high-quality, aesthetic trading card.
-          
-          Character: ${characterName}
-          Anime: ${animeSource}
-          Rarity: ${rarity}
-          User's Idea: ${userDescription}
-          
-          Return the result as a JSON object with:
-          - power_level: integer (1-1000)
-          - strength_rating: integer (1-1000)
-          - detailed_image_prompt: string (A long, descriptive prompt for image generation. Focus on aesthetic, high-key lighting, and character-specific details.)
-          
-          JSON format: {"power_level": 850, "strength_rating": 720, "detailed_image_prompt": "..."}`
-        }]
-      }],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            power_level: { type: Type.INTEGER },
-            strength_rating: { type: Type.INTEGER },
-            detailed_image_prompt: { type: Type.STRING }
-          },
-          required: ["power_level", "strength_rating", "detailed_image_prompt"]
+    
+    const intelligenceResponse = await withRetry(async () => {
+      return await ai.models.generateContent({
+        model: textModel,
+        contents: [{
+          parts: [{
+            text: `You are an expert anime lore researcher and card designer.
+            Based on the following user input, determine the character's actual power level in their anime lore on a scale of 1 to 1000.
+            Also, create a detailed artistic prompt for an image generation model to create a high-quality, aesthetic trading card.
+            
+            Character: ${characterName}
+            Anime: ${animeSource}
+            Rarity: ${rarity}
+            User's Idea: ${userDescription}
+            
+            Return the result as a JSON object with:
+            - power_level: integer (1-1000)
+            - strength_rating: integer (1-1000)
+            - detailed_image_prompt: string (A long, descriptive prompt for image generation. Focus on aesthetic, high-key lighting, and character-specific details.)
+            
+            JSON format: {"power_level": 850, "strength_rating": 720, "detailed_image_prompt": "..."}`
+          }]
+        }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              power_level: { type: Type.INTEGER },
+              strength_rating: { type: Type.INTEGER },
+              detailed_image_prompt: { type: Type.STRING }
+            },
+            required: ["power_level", "strength_rating", "detailed_image_prompt"]
+          }
         }
-      }
+      });
     });
 
     const intelligenceData = JSON.parse(intelligenceResponse.text);
     
     // Step 2: Generate the Image using the detailed prompt
     const imageModel = "gemini-3.1-flash-image-preview";
-    const imageResponse = await ai.models.generateContent({
-      model: imageModel,
-      contents: {
-        parts: [{ text: intelligenceData.detailed_image_prompt }]
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "3:4",
-          imageSize: "1K"
+    
+    const imageResponse = await withRetry(async () => {
+      try {
+        return await ai.models.generateContent({
+          model: imageModel,
+          contents: {
+            parts: [{ text: intelligenceData.detailed_image_prompt }]
+          },
+          config: {
+            imageConfig: {
+              aspectRatio: "3:4",
+              imageSize: "1K"
+            }
+          }
+        });
+      } catch (err: any) {
+        // If the high-quality model fails for reasons other than rate limit, try fallback
+        const isRateLimit = err.message?.includes("429") || 
+                            err.message?.toLowerCase().includes("rate limit") || 
+                            err.message?.toLowerCase().includes("quota");
+        
+        if (!isRateLimit && (err.message?.includes("not found") || err.message?.includes("permission"))) {
+           console.warn("Primary image model failed, trying fallback model...");
+           return await ai.models.generateContent({
+             model: "gemini-2.5-flash-image",
+             contents: {
+               parts: [{ text: intelligenceData.detailed_image_prompt }]
+             },
+             config: {
+               imageConfig: {
+                 aspectRatio: "3:4"
+               }
+             }
+           });
         }
+        throw err;
       }
     });
 
     let imageUrl = "";
-    for (const part of imageResponse.candidates[0].content.parts) {
-      if (part.inlineData) {
-        imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-        break;
+    if (imageResponse.candidates?.[0]?.content?.parts) {
+      for (const part of imageResponse.candidates[0].content.parts) {
+        if (part.inlineData) {
+          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
       }
     }
 
     if (!imageUrl) {
-      throw new Error("Failed to generate image. Please try again.");
+      throw new Error("Failed to generate image. The model returned no image data. This might be due to safety filters.");
     }
 
     return {
@@ -165,10 +215,21 @@ const generateAnimeCardData = async (
       prompt_text: intelligenceData.detailed_image_prompt
     };
   } catch (error: any) {
+    console.error("Gemini Error:", error);
+    
+    // Specific check for the Headers error to provide a clear explanation
+    if (error.message?.includes("append") && error.message?.includes("Headers")) {
+      throw new Error("API Key format error: The selected API key contains invalid characters. Please re-copy and paste your API key carefully, ensuring no extra spaces or special characters.");
+    }
+    
+    if (error.message?.includes("429") || error.message?.toLowerCase().includes("rate limit") || error.message?.toLowerCase().includes("quota")) {
+      throw new Error("Gemini API rate limit exceeded. Please wait a few minutes and try again. If you are using a free key, this is common.");
+    }
+
     if (error.message?.includes("Requested entity was not found") || error.message?.includes("permission denied")) {
       if (window.aistudio) {
         await window.aistudio.openSelectKey();
-        throw new Error("API Key permission error. Please select a valid API key from a paid project and try again.");
+        throw new Error("API Key permission error. Please select a valid API key from a paid Google Cloud project for high-quality image generation.");
       }
     }
     throw error;
@@ -353,9 +414,8 @@ export default function App() {
         }
       } catch (error) {
         console.error("Auth state change error:", error);
-        if (u) {
-          handleFirestoreError(error, OperationType.GET, `players/${u.uid}`);
-        }
+        // Don't re-throw here to avoid crashing the app and causing a white screen
+        // Instead, we can show a non-fatal error or just log it
       } finally {
         setLoading(false);
       }
@@ -1651,25 +1711,36 @@ function SetupView({ user, setPlayer, setView }: { user: User | null, setPlayer:
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !name || !age || !favAnime) return;
+    if (!user || !name.trim() || !age || !favAnime.trim()) {
+      alert("Please fill in all fields.");
+      return;
+    }
+
+    const parsedAge = parseInt(age);
+    if (isNaN(parsedAge)) {
+      alert("Please enter a valid age.");
+      return;
+    }
 
     setSaving(true);
     try {
       const playerData: Player = {
         uid: user.uid,
-        name,
-        age: parseInt(age),
-        favAnime,
+        name: name.trim(),
+        age: parsedAge,
+        favAnime: favAnime.trim(),
         totalPower: 0,
         lastGenerations: [],
         photoURL: user.photoURL || undefined,
         role: user.email === ADMIN_EMAIL ? 'admin' : 'user'
       };
 
+      console.log("Saving player profile:", playerData);
       await setDoc(doc(db, 'players', user.uid), playerData);
       setPlayer(playerData);
       setView('home');
     } catch (error) {
+      console.error("Error saving profile:", error);
       handleFirestoreError(error, OperationType.CREATE, `players/${user.uid}`);
     } finally {
       setSaving(false);

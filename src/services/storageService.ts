@@ -13,7 +13,8 @@ export const uploadToR2 = async (
   contentType: string = 'image/png'
 ): Promise<string> => {
   const workerUrl = import.meta.env.VITE_WORKER_URL;
-  const authKey = import.meta.env.VITE_WORKER_AUTH_KEY;
+  const rawAuthKey = import.meta.env.VITE_WORKER_AUTH_KEY || '';
+  const authKey = rawAuthKey.replace(/[^\x00-\x7F]/g, "").trim();
 
   if (!workerUrl || !authKey) {
     console.warn("Worker URL or Auth Key not configured. Falling back to base64 storage.");
