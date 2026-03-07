@@ -402,18 +402,6 @@ export default function App() {
                 <AlertCircle className="w-4 h-4" />
                 Help
               </button>
-              {window.aistudio && (
-                <button 
-                  onClick={handleSelectKey} 
-                  className={cn(
-                    "px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-2",
-                    hasSelectedKey ? "bg-white/5 text-zinc-400 hover:bg-white/10" : "bg-amber-500 text-zinc-950 hover:bg-amber-400 animate-pulse"
-                  )}
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  {hasSelectedKey ? "API Key Selected" : "Select API Key"}
-                </button>
-              )}
               {user?.email === ADMIN_EMAIL && (
                 <button 
                   onClick={() => setView('admin')} 
