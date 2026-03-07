@@ -12,6 +12,7 @@ import './i18n';
 import { Helmet, HelmetProvider } from 'react-helmet-async';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Trophy, 
   User as UserIcon, 
@@ -27,7 +28,10 @@ import {
   RefreshCw,
   ChevronRight,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
+  Sword,
+  Star
 } from 'lucide-react';
 import { formatDistanceToNow, isAfter, addHours, parseISO } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -55,32 +59,91 @@ const CARD_ACCENT_COLORS = [
 ];
 
 // --- Gemini Generation ---
-const generateAnimeCardData = async (characterName: string): Promise<{ imageUrl: string, raw_power: number, strength: number, prompt_text: string }> => {
-  try {
-    const response = await fetch('/api/generate-card', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ characterName })
-    });
-
-    const contentType = response.headers.get("content-type");
-    if (!contentType || !contentType.includes("application/json")) {
-      const text = await response.text();
-      console.error("Non-JSON response received:", text);
-      throw new Error(`Server returned non-JSON response (Status ${response.status}). Check server logs.`);
-    }
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "Failed to generate card.");
-    }
-
-    return data;
-  } catch (error: any) {
-    console.error("API Call Error:", error);
-    throw error;
+const generateAnimeCardData = async (
+  characterName: string, 
+  animeSource: string, 
+  rarity: string, 
+  userDescription: string
+): Promise<{ imageUrl: string, raw_power: number, strength: number, prompt_text: string }> => {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("Gemini API Key not configured. Please select your API key.");
   }
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  // Step 1: Use Intelligence to generate detailed prompt and power level
+  const textModel = "gemini-3-flash-preview";
+  const intelligenceResponse = await ai.models.generateContent({
+    model: textModel,
+    contents: [{
+      parts: [{
+        text: `You are an expert anime lore researcher and card designer.
+        Based on the following user input, determine the character's actual power level in their anime lore on a scale of 1 to 1000.
+        Also, create a detailed artistic prompt for an image generation model to create a high-quality, aesthetic trading card.
+        
+        Character: ${characterName}
+        Anime: ${animeSource}
+        Rarity: ${rarity}
+        User's Idea: ${userDescription}
+        
+        Return the result as a JSON object with:
+        - power_level: integer (1-1000)
+        - strength_rating: integer (1-1000)
+        - detailed_image_prompt: string (A long, descriptive prompt for image generation. Focus on aesthetic, high-key lighting, and character-specific details.)
+        
+        JSON format: {"power_level": 850, "strength_rating": 720, "detailed_image_prompt": "..."}`
+      }]
+    }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          power_level: { type: Type.INTEGER },
+          strength_rating: { type: Type.INTEGER },
+          detailed_image_prompt: { type: Type.STRING }
+        },
+        required: ["power_level", "strength_rating", "detailed_image_prompt"]
+      }
+    }
+  });
+
+  const intelligenceData = JSON.parse(intelligenceResponse.text);
+  
+  // Step 2: Generate the Image using the detailed prompt
+  const imageModel = "gemini-3.1-flash-image-preview";
+  const imageResponse = await ai.models.generateContent({
+    model: imageModel,
+    contents: {
+      parts: [{ text: intelligenceData.detailed_image_prompt }]
+    },
+    config: {
+      imageConfig: {
+        aspectRatio: "3:4",
+        imageSize: "1K"
+      }
+    }
+  });
+
+  let imageUrl = "";
+  for (const part of imageResponse.candidates[0].content.parts) {
+    if (part.inlineData) {
+      imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+      break;
+    }
+  }
+
+  if (!imageUrl) {
+    throw new Error("Failed to generate image. Please try again.");
+  }
+
+  return {
+    imageUrl,
+    raw_power: intelligenceData.power_level,
+    strength: intelligenceData.strength_rating,
+    prompt_text: intelligenceData.detailed_image_prompt
+  };
 };
 
 // --- Components ---
@@ -426,13 +489,15 @@ export default function App() {
                   <section>
                     <h3 className="text-lg font-bold text-emerald-500 mb-3 flex items-center gap-2">
                       <Zap className="w-5 h-5" />
-                      How to get an API Key
+                      How to get a Free Gemini API Key
                     </h3>
                     <ol className="list-decimal list-inside space-y-3 text-zinc-400">
-                      <li>Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">Google AI Studio</a>.</li>
-                      <li>Create a new API key (ensure it's from a project with billing enabled for high-quality models).</li>
-                      <li>In this app, click the "Select API Key" button in the banner or during generation.</li>
-                      <li>For more info on billing, see <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">Gemini Billing Docs</a>.</li>
+                      <li>Go to <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">Google AI Studio</a>.</li>
+                      <li>Sign in with your Google Account.</li>
+                      <li>Click on <strong>"Get API key"</strong> in the left sidebar.</li>
+                      <li>Click <strong>"Create API key"</strong>. You can use the "Free of charge" tier which has generous rate limits for hobbyists.</li>
+                      <li>Copy the key and use the "Select API Key" button in this app to paste it.</li>
+                      <li><em>Note:</em> High-quality image generation (gemini-3.1-flash-image-preview) might require a project with billing enabled, but you can often use the free tier for standard models.</li>
                     </ol>
                   </section>
 
@@ -586,7 +651,10 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
   const [canGenerate, setCanGenerate] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [newCard, setNewCard] = useState<Card | null>(null);
-  const [customName, setCustomName] = useState('');
+  const [characterName, setCharacterName] = useState('');
+  const [animeSource, setAnimeSource] = useState('');
+  const [rarity, setRarity] = useState('Common');
+  const [userDescription, setUserDescription] = useState('');
 
   useEffect(() => {
     if (!player) return;
@@ -620,20 +688,33 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
   const handleGenerate = async (isRandom = false) => {
     if (!user || !player || (!canGenerate)) return;
 
-    // Check if API key is selected
     setGenerating(true);
     try {
-      const nameToGenerate = isRandom 
-        ? POPULAR_ANIME_CHARACTERS[Math.floor(Math.random() * POPULAR_ANIME_CHARACTERS.length)]
-        : customName;
+      let nameToGen = characterName;
+      let animeToGen = animeSource;
+      let rarityToGen = rarity;
+      let descToGen = userDescription;
 
-      if (!nameToGenerate) {
-        alert("Please enter a character name or use random generate.");
+      if (isRandom) {
+        nameToGen = POPULAR_ANIME_CHARACTERS[Math.floor(Math.random() * POPULAR_ANIME_CHARACTERS.length)];
+        animeToGen = "Various Anime";
+        rarityToGen = ["Common", "Rare", "Epic", "Legendary"][Math.floor(Math.random() * 4)];
+        descToGen = "A random legendary character from the anime multiverse.";
+      }
+
+      if (!nameToGen || !animeToGen) {
+        alert("Please enter at least character name and anime source.");
         setGenerating(false);
         return;
       }
 
-      const { imageUrl: base64ImageUrl, raw_power, strength, prompt_text } = await generateAnimeCardData(nameToGenerate);
+      const { imageUrl: base64ImageUrl, raw_power, strength, prompt_text } = await generateAnimeCardData(
+        nameToGen, 
+        animeToGen, 
+        rarityToGen, 
+        descToGen
+      );
+      
       const accentColor = CARD_ACCENT_COLORS[Math.floor(Math.random() * CARD_ACCENT_COLORS.length)];
       const cardId = Math.random().toString(36).substring(2, 15);
 
@@ -645,7 +726,10 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         cardId,
         player_id: user.uid,
         ownerName: player.name,
-        characterName: nameToGenerate,
+        characterName: nameToGen,
+        animeSource: animeToGen,
+        rarity: rarityToGen,
+        description: descToGen,
         imageUrl: finalImageUrl,
         raw_power,
         strength,
@@ -664,15 +748,14 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
         handleFirestoreError(error, OperationType.CREATE, `cards/${cardId}`);
       }
 
-      // Save Card to Realtime Database (as requested by user)
+      // Save Card to Realtime Database
       try {
         await rtdbSet(ref(rtdb, `cards/${cardId}`), card);
-        console.log("Card saved to Realtime Database successfully");
       } catch (error) {
         console.error("Error saving to Realtime Database:", error);
       }
 
-      // Update Player Cooldown ONLY (Power added after admin approval)
+      // Update Player Cooldown
       const newLastGens = [...(player.lastGenerations || []), new Date().toISOString()].slice(-MAX_GENERATIONS);
       
       const updatedPlayer = {
@@ -690,26 +773,12 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
 
       setPlayer(updatedPlayer);
       setNewCard(card);
-      setCustomName('');
+      setCharacterName('');
+      setAnimeSource('');
+      setUserDescription('');
     } catch (error: any) {
       console.error("Generation failed", error);
-      
-      // Handle server-side error codes
-      if (error.message.includes("INVALID_API_KEY") || error.message.includes("API key not valid")) {
-        alert("Your Gemini API key is invalid or has expired. Please select a valid API key from a project with billing enabled for high-quality image generation.");
-        if (window.aistudio) {
-          try {
-            await window.aistudio.openSelectKey();
-          } catch (e) {
-            console.error("Failed to open key selector", e);
-          }
-        }
-      } else if (error.message.includes("not configured")) {
-        alert("Gemini API Key is not configured. Please select your API key using the 'Select API Key' button.");
-        if (window.aistudio) await window.aistudio.openSelectKey();
-      } else {
-        alert("Generation failed: " + error.message);
-      }
+      alert("Generation failed: " + error.message);
     } finally {
       setGenerating(false);
     }
@@ -760,15 +829,54 @@ function GenerateView({ user, player, setPlayer }: { user: User | null, player: 
           )}
 
           <div className="space-y-6">
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-zinc-500 uppercase tracking-widest">{t('generate.custom_name_placeholder')}</label>
-              <input 
-                type="text" 
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-                placeholder="e.g. Super Saiyan Fuad"
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 transition-colors"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-zinc-500 uppercase tracking-widest">Character Name</label>
+                <input 
+                  type="text" 
+                  value={characterName}
+                  onChange={(e) => setCharacterName(e.target.value)}
+                  placeholder="e.g. Goku"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-zinc-500 uppercase tracking-widest">Anime Source</label>
+                <input 
+                  type="text" 
+                  value={animeSource}
+                  onChange={(e) => setAnimeSource(e.target.value)}
+                  placeholder="e.g. Dragon Ball Z"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-zinc-500 uppercase tracking-widest">Rarity</label>
+                <select 
+                  value={rarity}
+                  onChange={(e) => setRarity(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 transition-colors appearance-none"
+                >
+                  <option value="Common" className="bg-zinc-900">Common</option>
+                  <option value="Rare" className="bg-zinc-900">Rare</option>
+                  <option value="Epic" className="bg-zinc-900">Epic</option>
+                  <option value="Legendary" className="bg-zinc-900">Legendary</option>
+                  <option value="Mythic" className="bg-zinc-900">Mythic</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-zinc-500 uppercase tracking-widest">Aesthetic Idea</label>
+                <input 
+                  type="text" 
+                  value={userDescription}
+                  onChange={(e) => setUserDescription(e.target.value)}
+                  placeholder="e.g. Cyberpunk vibe, neon lights"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -954,6 +1062,7 @@ function AdminView() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-xl font-bold truncate">{card.characterName}</h3>
+                <p className="text-xs text-zinc-500 mb-1">Anime: <span className="text-zinc-300">{card.animeSource}</span> • Rarity: <span className="text-zinc-300">{card.rarity}</span></p>
                 <p className="text-xs text-zinc-500 mb-2">Owner: <span className="text-zinc-300">{card.ownerName}</span></p>
                 
                 {card.prompt_text && (
@@ -1071,7 +1180,7 @@ function CardUI({ card }: { card: Card & { accentColor?: string } }) {
               </div>
               <div className="flex items-center gap-2">
                 <div className={cn("h-1 w-12 rounded-full", accentBg.replace('bg-', 'bg-').replace('/10', ''))} />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">Legendary Edition</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">{card.animeSource} • {card.rarity}</span>
               </div>
             </div>
 

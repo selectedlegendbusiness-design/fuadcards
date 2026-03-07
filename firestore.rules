@@ -82,16 +82,19 @@ service cloud.firestore {
     }
 
     function isValidCard(data) {
-      return hasRequiredFields(data, ['cardId', 'player_id', 'imageUrl', 'raw_power', 'strength', 'status', 'is_approved', 'createdAt']) &&
+      return hasRequiredFields(data, ['cardId', 'player_id', 'imageUrl', 'raw_power', 'strength', 'status', 'is_approved', 'createdAt', 'characterName', 'animeSource', 'rarity']) &&
              data.cardId is string && data.cardId.size() <= 100 &&
              data.player_id is string && data.player_id.size() <= 100 &&
              isValidUrl(data.imageUrl) && data.imageUrl.size() <= 2000 &&
-             data.raw_power is int &&
+             data.raw_power is int && data.raw_power >= 0 && data.raw_power <= 1000 &&
              data.strength is int &&
              data.status in ['pending', 'ordered', 'approved'] &&
              data.is_approved is bool &&
              isValidDateString(data.createdAt) &&
-             (!('characterName' in data) || (data.characterName is string && data.characterName.size() <= 100)) &&
+             data.characterName is string && data.characterName.size() <= 100 &&
+             data.animeSource is string && data.animeSource.size() <= 100 &&
+             data.rarity is string && data.rarity.size() <= 50 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 500)) &&
              (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 100)) &&
              (!('accentColor' in data) || (data.accentColor is string && data.accentColor.size() <= 50)) &&
              (!('prompt_text' in data) || (data.prompt_text is string && data.prompt_text.size() <= 2000)) &&

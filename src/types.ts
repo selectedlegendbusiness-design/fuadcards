@@ -14,6 +14,9 @@ export interface Card {
   player_id: string;
   ownerName: string;
   characterName: string;
+  animeSource: string;
+  rarity: string;
+  description?: string;
   imageUrl: string;
   raw_power: number;
   strength: number;

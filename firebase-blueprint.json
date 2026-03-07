@@ -29,6 +29,9 @@
         "player_id": { "type": "string" },
         "ownerName": { "type": "string" },
         "characterName": { "type": "string" },
+        "animeSource": { "type": "string" },
+        "rarity": { "type": "string" },
+        "description": { "type": "string" },
         "imageUrl": { "type": "string" },
         "raw_power": { "type": "integer" },
         "strength": { "type": "integer" },
@@ -39,7 +42,7 @@
         "prompt_text": { "type": "string" },
         "qr_data": { "type": "string" }
       },
-      "required": ["cardId", "player_id", "imageUrl", "raw_power", "strength"]
+      "required": ["cardId", "player_id", "imageUrl", "raw_power", "strength", "characterName", "animeSource", "rarity"]
     }
   },
   "firestore": {
