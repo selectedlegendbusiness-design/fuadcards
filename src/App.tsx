@@ -336,9 +336,9 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        try {
+      try {
+        setUser(u);
+        if (u) {
           const playerDoc = await getDoc(doc(db, 'players', u.uid));
           if (playerDoc.exists()) {
             const pData = playerDoc.data() as Player;
@@ -347,14 +347,18 @@ export default function App() {
           } else {
             setView('setup');
           }
-        } catch (error) {
+        } else {
+          setPlayer(null);
+          setView(prev => prev !== 'leaderboard' ? 'home' : prev);
+        }
+      } catch (error) {
+        console.error("Auth state change error:", error);
+        if (u) {
           handleFirestoreError(error, OperationType.GET, `players/${u.uid}`);
         }
-      } else {
-        setPlayer(null);
-        setView(prev => prev !== 'leaderboard' ? 'home' : prev);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
     return unsubscribe;
   }, []);
